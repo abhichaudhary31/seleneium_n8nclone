@@ -138,7 +138,7 @@ def run_image_generation(script_path, scene_number, scene_title):
     print(f"\n--- Generating image for Scene {scene_number}: {scene_title} ---")
     
     try:
-        # Get the Python executable path
+        # Get the Python executable pat
         python_path = "/Users/abhchaudhary/personnel_github/seleneium_n8nclone/.venv/bin/python"
         
         # Run the script
