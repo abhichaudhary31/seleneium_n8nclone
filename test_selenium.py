@@ -796,7 +796,7 @@ def send_files_to_input(driver, file_input, file_paths, max_retries=3):
             # Wait and verify
             time.sleep(2)
             
-            # Check if files were accepted (simple validation)
+            # Check if files were
             try:
                 value = file_input.get_attribute("value")
                 if value and any(os.path.basename(path) in value for path in file_paths):
