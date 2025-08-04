@@ -14,7 +14,7 @@ from selenium.common.exceptions import TimeoutException
 GOOGLE_EMAIL = "chaudharyabhishek031@gmail.com"
 GOOGLE_PASSWORD = "GAme++0103"
 USER_DATA_DIR = os.path.join(os.path.expanduser("~"), "selenium_chrome_profile")
-DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Documents")
+DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "scene_videos")
 
 # Scene data and images directories
 SCENE_DATA_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "scene_data")
@@ -572,7 +572,7 @@ def process_scene(driver, wait, scene_data, scene_images):
                 # Optionally check for video generation completion
                 try:
                     print("Checking for video generation...")
-                    video_wait = WebDriverWait(driver, 120)  # Wait up to 1 minute for video
+                    video_wait = WebDriverWait(driver, 200)  # Wait up to 2 minute for video
                     video_wait.until(EC.presence_of_element_located((By.TAG_NAME, "video")))
                     print("Video has been generated successfully for this scene.")
                     

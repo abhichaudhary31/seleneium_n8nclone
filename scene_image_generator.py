@@ -141,25 +141,21 @@ def run_image_generation(script_path, scene_number, scene_title):
         # Get the Python executable path
         python_path = "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
         
-        # Run the script
+        # Run the script with real-time output (no capture_output)
+        print(f"🚀 Starting image generation for Scene {scene_number}...")
         result = subprocess.run([python_path, script_path], 
-                              capture_output=True, 
-                              text=True, 
-                              timeout=300)  # 5 minute timeout
+                              timeout=300)  # 5 minute timeout, removed capture_output=True
         
-        print(f"Image generation completed for Scene {scene_number}")
-        if result.stdout:
-            print("Output:", result.stdout[-500:])  # Last 500 characters
-        if result.stderr:
-            print("Errors:", result.stderr[-500:])
+        print(f"\n✅ Image generation process completed for Scene {scene_number}")
+        print(f"Return code: {result.returncode}")
             
         return result.returncode == 0
         
     except subprocess.TimeoutExpired:
-        print(f"Timeout: Image generation for Scene {scene_number} took too long")
+        print(f"⏰ Timeout: Image generation for Scene {scene_number} took too long")
         return False
     except Exception as e:
-        print(f"Error running image generation for Scene {scene_number}: {e}")
+        print(f"❌ Error running image generation for Scene {scene_number}: {e}")
         return False
 
 def generate_images_from_scenes(scenes):
