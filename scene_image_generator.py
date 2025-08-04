@@ -139,7 +139,7 @@ def run_image_generation(script_path, scene_number, scene_title):
     
     try:
         # Get the Python executable path
-        python_path = "/Users/abhchaudhary/personnel_github/seleneium_n8nclone/.venv/bin/python"
+        python_path = "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
         
         # Run the script
         result = subprocess.run([python_path, script_path], 
