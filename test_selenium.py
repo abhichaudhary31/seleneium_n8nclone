@@ -1,8 +1,15 @@
 import time
 import os
+import sys
+import subprocess
 import json
 import glob
 import random
+import smtplib
+from datetime import datetime
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from enum import Enum
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -10,20 +17,67 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
-# --- USER CONFIGURATION ---
-# IMPORTANT: Replace with your Google account credentials
-# Primary Account
-GOOGLE_EMAIL = "chaudharyabhishek031@gmail.com"
-GOOGLE_PASSWORD = "GAme++0103"
-USER_DATA_DIR = os.path.join(os.path.expanduser("~"), "selenium_chrome_profile")
+# --- CONFIGURATION LOADING ---
+try:
+    from config import *
+    print("✅ Loaded configuration from config.py")
+except ImportError:
+    try:
+        from config_template import *
+        print("⚠️ Using template configuration. Please copy config_template.py to config.py and update with your credentials.")
+    except ImportError:
+        print("❌ No configuration file found. Using fallback settings.")
+        # Fallback configuration
+        GOOGLE_EMAIL = "your_primary_email@gmail.com"
+        GOOGLE_PASSWORD = "your_primary_password"
+        BACKUP_EMAIL = "your_backup_email@gmail.com"
+        BACKUP_PASSWORD = "your_backup_password"
+        SWITCH_ACCOUNT_AFTER_RETRIES = 12
+        USER_DATA_DIR_NAME = "selenium_chrome_profile"
+        BACKUP_USER_DATA_DIR_NAME = "selenium_chrome_profile_backup"
+        OVERLAY_HANDLING = "simplified"
+        ENABLE_PAGE_RELOAD = False
+        PAGE_RELOAD_INTERVAL = 2
+        RETRY_WAIT_TIME = 26
+        SCENE_WAIT_TIME = 30
+        RESTART_AFTER_VIDEOS = 3
+        RESTART_PAUSE_MINUTES = 10
+        CHECKPOINT_FILE = "video_progress_checkpoint.json"
+        DOWNLOAD_DIR_NAME = "scene_videos"
+        SCENE_DATA_DIR_NAME = "scene_data"
+        SCENE_IMAGES_DIR_NAME = "scene_images"
+        MAX_RETRIES_PER_SCENE = 25
+        VIDEO_GENERATION_TIMEOUT = 200
+        ENABLE_DEBUG_SCREENSHOTS = True
+        DEBUG_SCREENSHOT_DIR = "Documents"
+        # Gmail notification fallback settings
+        ENABLE_EMAIL_NOTIFICATIONS = False
+        NOTIFICATION_EMAIL = "your_gmail_here@gmail.com"
+        NOTIFICATION_APP_PASSWORD = "your_gmail_app_password_here"
+        NOTIFICATION_RECIPIENT = "your_gmail_here@gmail.com"
+        GMAIL_SMTP_SERVER = "smtp.gmail.com"
+        GMAIL_SMTP_PORT = 587
 
-# Backup Account (used after 12 retries)
-BACKUP_EMAIL = "theladyinsaree@gmail.com"  # Replace with your backup email
-BACKUP_PASSWORD = "Stuti@0103"      # Replace with your backup password
-BACKUP_USER_DATA_DIR = os.path.join(os.path.expanduser("~"), "selenium_chrome_profile_backup")
+# Build paths from configuration
+USER_DATA_DIR = os.path.join(os.path.expanduser("~"), USER_DATA_DIR_NAME)
+BACKUP_USER_DATA_DIR = os.path.join(os.path.expanduser("~"), BACKUP_USER_DATA_DIR_NAME)
+DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads", DOWNLOAD_DIR_NAME)
+SCENE_DATA_DIR = os.path.join(os.path.expanduser("~"), "Downloads", SCENE_DATA_DIR_NAME)
+SCENE_IMAGES_DIR = os.path.join(os.path.expanduser("~"), "Downloads", SCENE_IMAGES_DIR_NAME)
 
-# Global account switching configuration
-SWITCH_ACCOUNT_AFTER_RETRIES = 3  # Switch accounts every N+1 attempts (e.g., 3 means switch every 4 attempts: 1-4 primary, 5-8 backup, 9-12 primary, etc.)
+# --- ERROR CATEGORIZATION ---
+class ErrorType(Enum):
+    QUOTA_EXCEEDED = "quota_exceeded"
+    PERMISSION_DENIED = "permission_denied"
+    NETWORK_ERROR = "network_error"
+    ELEMENT_NOT_FOUND = "element_not_found"
+    CLICK_INTERCEPTED = "click_intercepted"
+    UPLOAD_FAILED = "upload_failed"
+    ACCOUNT_SWITCH_FAILED = "account_switch_failed"
+    CONFIGURATION_ERROR = "configuration_error"
+    UNKNOWN_ERROR = "unknown_error"
+
+# Global state
 current_account = "primary"  # Track which account is currently active
 
 # Persistent browser instances
@@ -34,11 +88,82 @@ backup_wait = None       # Backup account wait instance
 global_driver = None     # Currently active driver
 global_wait = None       # Currently active wait
 
-DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "scene_videos")
+def categorize_error(error_message):
+    """Categorize errors for better handling and reporting"""
+    error_msg = str(error_message).lower()
+    
+    if "quota exceeded" in error_msg:
+        return ErrorType.QUOTA_EXCEEDED
+    elif "permission denied" in error_msg:
+        return ErrorType.PERMISSION_DENIED
+    elif "element click intercepted" in error_msg or "overlay" in error_msg:
+        return ErrorType.CLICK_INTERCEPTED
+    elif "no such element" in error_msg or "element not found" in error_msg:
+        return ErrorType.ELEMENT_NOT_FOUND
+    elif "network" in error_msg or "connection" in error_msg:
+        return ErrorType.NETWORK_ERROR
+    else:
+        return ErrorType.UNKNOWN_ERROR
 
-# Scene data and images directories
-SCENE_DATA_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "scene_data")
-SCENE_IMAGES_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "scene_images")
+def handle_overlay_simple():
+    """Simplified overlay handling based on configuration"""
+    global global_driver
+    
+    if OVERLAY_HANDLING == "off":
+        return
+    
+    try:
+        if OVERLAY_HANDLING == "minimal":
+            # Just send escape key
+            body = global_driver.find_element(By.TAG_NAME, 'body')
+            body.send_keys(Keys.ESCAPE)
+            time.sleep(0.2)
+            
+        elif OVERLAY_HANDLING == "simplified":
+            # Basic overlay removal with common selectors
+            print("🔍 Dismissing overlays (simplified approach)...")
+            
+            # Send Escape keys first
+            body = global_driver.find_element(By.TAG_NAME, 'body')
+            for i in range(2):
+                body.send_keys(Keys.ESCAPE)
+                time.sleep(0.3)
+            
+            # Remove common overlay types
+            overlays = global_driver.find_elements(By.CSS_SELECTOR, 
+                ".cdk-overlay-backdrop, .mat-overlay-backdrop, .backdrop")
+            
+            if overlays:
+                print(f"Found {len(overlays)} overlay(s) - removing...")
+                for overlay in overlays:
+                    try:
+                        global_driver.execute_script("arguments[0].remove();", overlay)
+                    except:
+                        pass
+            
+            print("✅ Overlay dismissal completed")
+            
+    except Exception as e:
+        print(f"⚠️ Error during overlay dismissal: {e}")
+
+def save_debug_screenshot(context="debug"):
+    """Save debug screenshot if enabled"""
+    if not ENABLE_DEBUG_SCREENSHOTS:
+        return None
+        
+    try:
+        timestamp = int(time.time())
+        screenshot_path = os.path.join(
+            os.path.expanduser("~"), 
+            DEBUG_SCREENSHOT_DIR, 
+            f"{context}_{current_account}_{timestamp}.png"
+        )
+        global_driver.save_screenshot(screenshot_path)
+        print(f"📸 Debug screenshot saved: {screenshot_path}")
+        return screenshot_path
+    except Exception as e:
+        print(f"⚠️ Could not save debug screenshot: {e}")
+        return None
 
 def load_latest_scene_data():
     """Load the most recent scene data JSON file"""
@@ -127,13 +252,8 @@ def upload_images_to_veo(driver, wait, image_paths):
         
         print(f"Attempting to upload {len(image_paths)} images...")
         
-        # First, let's take a screenshot to see the current state
-        try:
-            debug_path = os.path.join(os.path.expanduser("~"), "Documents", f"debug_upload_state_{int(time.time())}.png")
-            driver.save_screenshot(debug_path)
-            print(f"Debug screenshot saved: {debug_path}")
-        except:
-            pass
+        # Save debug screenshot if enabled
+        save_debug_screenshot("upload_state")
         
         # Multiple strategies to find and click upload button
         upload_strategies = [
@@ -191,7 +311,7 @@ def upload_images_to_veo(driver, wait, image_paths):
                                 button.click()
                                 upload_button = button
                                 upload_clicked = True
-                                print(f"Button {i+1} clicked successfully using strategy {strategy_num}.")
+                                print(f"Button {i+1} clicked successfully with strategy {strategy_num}.")
                                 break
                         except Exception as e:
                             print(f"Button {i+1} failed: {e}")
@@ -389,13 +509,8 @@ def upload_images_to_veo(driver, wait, image_paths):
             print("Images uploaded successfully using send_keys method.")
             time.sleep(2)  # Final wait for upload to process
             
-            # Take a screenshot to verify the upload
-            try:
-                debug_path = os.path.join(os.path.expanduser("~"), "Documents", f"debug_after_upload_{int(time.time())}.png")
-                driver.save_screenshot(debug_path)
-                print(f"Post-upload screenshot saved: {debug_path}")
-            except:
-                pass
+            # Save post-upload screenshot if enabled
+            save_debug_screenshot("after_upload")
             
             return True
         else:
@@ -421,6 +536,350 @@ def upload_images_to_veo(driver, wait, image_paths):
     except Exception as e:
         print(f"Error uploading images: {e}")
         return False
+
+def select_dropdown_option(driver, wait, context="", target_duration=None):
+    """Select a duration from dropdown that currently shows 8s
+    
+    Parameters:
+    - driver: WebDriver instance
+    - wait: WebDriverWait instance
+    - context: Optional context string for logging
+    - target_duration: Optional specific duration to select ('5s', '6s', or '7s'). If None, randomly chooses.
+    """
+    try:
+        # If no specific duration provided, randomly select one
+        if not target_duration:
+            duration_options = ['5s', '6s', '7s']
+            target_duration = random.choice(duration_options)
+        
+        context_msg = f" {context}" if context else ""
+        print(f"\n====== DROPDOWN SELECTION DEBUG ======")
+        print(f"🔽 Attempting to select {target_duration} duration from dropdown{context_msg}...")
+        print(f"🎯 PRIMARY TARGET: Dropdown with class='mat-mdc-select-value' and id='mat-select-value-1'")
+        print(f"🎯 SECONDARY TARGET: Element showing '8s' text that can be clicked")
+        print(f"🎯 OPTION TARGET: Option with text '{target_duration}'")
+        print(f"📊 Current URL: {driver.current_url}")
+        
+        # Debug: Check page state
+        try:
+            page_title = driver.title
+            body_text = driver.find_element(By.TAG_NAME, "body").text[:100] + "..."
+            print(f"📄 Page title: {page_title}")
+            print(f"📝 Page content snippet: {body_text}")
+            
+            # Look for any mat-select elements on the page
+            all_selects = driver.find_elements(By.TAG_NAME, "mat-select")
+            print(f"🔢 Found {len(all_selects)} mat-select elements on page")
+            
+            # Look for elements with exact mat-mdc-select-value class
+            mdc_select_values = driver.find_elements(By.CSS_SELECTOR, ".mat-mdc-select-value")
+            print(f"🎯 Found {len(mdc_select_values)} elements with class 'mat-mdc-select-value'")
+            
+            # Look specifically for the target element we want
+            target_element = driver.find_elements(By.CSS_SELECTOR, ".mat-mdc-select-value#mat-select-value-4")
+            print(f"🎯 Found {len(target_element)} elements with class 'mat-mdc-select-value' AND id='mat-select-value-4'")
+            
+            # Show details of all elements with the exact class we want
+            for i, elem in enumerate(mdc_select_values[:3]):
+                try:
+                    elem_id = elem.get_attribute('id') or 'No ID'
+                    elem_text = elem.text or elem.get_attribute('textContent') or 'No text'
+                    is_displayed = elem.is_displayed()
+                    is_enabled = elem.is_enabled()
+                    print(f"  Select element {i+1}: ID='{elem_id}', Text='{elem_text}', Displayed={is_displayed}, Enabled={is_enabled}")
+                except Exception as elem_error:
+                    print(f"  Error getting select element {i+1} details: {elem_error}")
+            
+            # Look for elements with '8s' text
+            elements_with_8s = driver.find_elements(By.XPATH, "//*[contains(text(), '8s')]")
+            print(f"🔢 Found {len(elements_with_8s)} elements containing '8s' text")
+            
+            # Show the first few elements with '8s' if any
+            if elements_with_8s:
+                print("📋 Elements with '8s' text:")
+                for i, elem in enumerate(elements_with_8s[:3]):
+                    try:
+                        tag = elem.tag_name
+                        classes = elem.get_attribute('class') or 'No class'
+                        text = elem.text or elem.get_attribute('textContent') or 'No text'
+                        print(f"  Element {i+1}: <{tag}> '{text}' | Classes: '{classes}'")
+                    except:
+                        print(f"  Element {i+1}: <error getting details>")
+        except Exception as debug_error:
+            print(f"⚠️ Debug info collection error: {debug_error}")
+        
+        print("====== DROPDOWN SEARCH STARTING ======")
+        
+        # Multiple strategies to find and click the dropdown showing "8s"
+        dropdown_strategies = [
+            # Strategy 1: Element with ID mat-select-value-1 (based on debug output)
+            (By.ID, "mat-select-value-1"),
+            # Strategy 2: Element with 8s text and specific class
+            (By.XPATH, "//div[contains(@class, 'mat-mdc-select-value') and contains(text(), '8s')]"),
+            # Strategy 3: Exact match for ID and class combination
+            (By.CSS_SELECTOR, ".mat-mdc-select-value#mat-select-value-1"),
+            # Strategy 4: Any element containing "8s" text
+            (By.XPATH, "//*[contains(text(), '8s')]"),
+            # Strategy 5: Mat-select element containing "8s" text
+            (By.XPATH, "//mat-select//*[contains(text(), '8s')]"),
+            # Strategy 6: Any clickable element with "8s"
+            (By.XPATH, "//*[contains(text(), '8s') and (@role='button' or @role='combobox')]"),
+            # Strategy 7: Look for any mat-select-value element as fallback
+            (By.CSS_SELECTOR, ".mat-mdc-select-value"),
+        ]
+        
+        dropdown_clicked = False
+        print(f"🔍 Will try {len(dropdown_strategies)} different strategies to find the dropdown")
+        
+        for strategy_num, (by, selector) in enumerate(dropdown_strategies, 1):
+            try:
+                print(f"\n🔍 Strategy #{strategy_num}: {by} '{selector}'")
+                
+                # First check if elements matching selector exist at all
+                matching_elements = driver.find_elements(by, selector)
+                print(f"  ↳ Found {len(matching_elements)} matching elements")
+                
+                if matching_elements:
+                    # Display details of the first few matching elements
+                    for i, elem in enumerate(matching_elements[:2]):
+                        try:
+                            is_displayed = elem.is_displayed()
+                            is_enabled = elem.is_enabled()
+                            elem_text = elem.text or elem.get_attribute('textContent') or 'No text'
+                            elem_id = elem.get_attribute('id') or 'No ID'
+                            elem_class = elem.get_attribute('class') or 'No class'
+                            print(f"  ↳ Element {i+1}: '{elem_text}' | ID: '{elem_id}' | Displayed: {is_displayed} | Enabled: {is_enabled}")
+                        except Exception as detail_error:
+                            print(f"  ↳ Error getting element {i+1} details: {detail_error}")
+                
+                # Wait for dropdown to be clickable
+                print("  ↳ Waiting for element to be clickable...")
+                dropdown = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((by, selector))
+                )
+                
+                print("  ↳ Element is clickable! Scrolling into view...")
+                # Scroll into view and click
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", dropdown)
+                time.sleep(0.5)
+                
+                # Get element properties before clicking
+                try:
+                    dropdown_text = dropdown.text or dropdown.get_attribute('textContent') or 'No text'
+                    dropdown_tag = dropdown.tag_name
+                    dropdown_id = dropdown.get_attribute('id') or 'No ID'
+                    print(f"  ↳ Ready to click: <{dropdown_tag}> '{dropdown_text}' | ID: {dropdown_id}")
+                except Exception as prop_error:
+                    print(f"  ↳ Error getting element properties: {prop_error}")
+                
+                # Try clicking the dropdown
+                try:
+                    # Get more detailed properties of the found dropdown
+                    print(f"⭐ Found dropdown to click with strategy {strategy_num}")
+                    try:
+                        dropdown_classes = dropdown.get_attribute('class') or 'No class'
+                        dropdown_role = dropdown.get_attribute('role') or 'No role'
+                        dropdown_ariaOwns = dropdown.get_attribute('aria-owns') or 'No aria-owns'
+                        print(f"  ↳ Classes: '{dropdown_classes}' | Role: '{dropdown_role}' | aria-owns: '{dropdown_ariaOwns}'")
+                    except Exception as attr_error:
+                        print(f"  ↳ Error getting additional attributes: {attr_error}")
+                    
+                    # Try regular click
+                    dropdown.click()
+                    print(f"✅ Dropdown clicked using strategy {strategy_num}")
+                    dropdown_clicked = True
+                    break
+                except Exception as click_error:
+                    print(f"⚠️ Standard click failed for strategy {strategy_num}: {click_error}")
+                    # Try JavaScript click
+                    try:
+                        driver.execute_script("arguments[0].click();", dropdown)
+                        print(f"✅ Dropdown clicked using JavaScript for strategy {strategy_num}")
+                        dropdown_clicked = True
+                        break
+                    except Exception as js_error:
+                        print(f"⚠️ JavaScript click also failed for strategy {strategy_num}: {js_error}")
+                        continue
+                        
+            except TimeoutException:
+                print(f"Dropdown strategy {strategy_num} - element not found")
+                continue
+            except Exception as e:
+                print(f"Dropdown strategy {strategy_num} failed: {e}")
+                continue
+        
+        if not dropdown_clicked:
+            print(f"⚠️ Warning: Could not find or click dropdown{context_msg}. Continuing without dropdown selection...")
+            return False
+        
+        # Wait for dropdown options to appear
+        time.sleep(2)
+        
+        # Debug: Check if dropdown is expanded and options are visible
+        try:
+            overlay_panels = driver.find_elements(By.CSS_SELECTOR, ".cdk-overlay-pane, .mat-select-panel-wrap, mat-option")
+            print(f"\n====== OPTION SELECTION DEBUG ======")
+            print(f"📊 Found {len(overlay_panels)} possible overlay panels/options")
+            
+            # Look for any mat-option elements
+            all_options = driver.find_elements(By.CSS_SELECTOR, "mat-option, [role='option']")
+            print(f"📊 Found {len(all_options)} total options/listbox items on page")
+            
+            # Show available options
+            if all_options:
+                print("📋 Available options:")
+                for i, opt in enumerate(all_options[:5]):  # Show first 5 options
+                    try:
+                        opt_text = opt.text or opt.get_attribute('textContent') or 'No text'
+                        opt_id = opt.get_attribute('id') or 'No ID'
+                        opt_value = opt.get_attribute('value') or 'No value'
+                        print(f"  Option {i+1}: '{opt_text}' | ID: '{opt_id}' | Value: '{opt_value}'")
+                    except Exception as opt_err:
+                        print(f"  Option {i+1}: <error getting details: {opt_err}>")
+            
+            # Look specifically for mat-option-25
+            target_option = driver.find_elements(By.ID, "mat-option-25")
+            print(f"🎯 Found {len(target_option)} elements with ID 'mat-option-25'")
+            if target_option:
+                try:
+                    opt = target_option[0]
+                    tag = opt.tag_name
+                    visible = opt.is_displayed()
+                    opt_text = opt.text or opt.get_attribute('textContent') or 'No text'
+                    print(f"  Target Option: <{tag}> '{opt_text}' | Visible: {visible}")
+                except Exception as opt_err:
+                    print(f"  Error getting target option details: {opt_err}")
+            
+            # Specifically look for options with "5s" text
+            options_with_5s = driver.find_elements(By.XPATH, "//*[contains(text(), '5s')]")
+            print(f"🎯 Found {len(options_with_5s)} elements containing '5s' text")
+            if options_with_5s:
+                for i, opt in enumerate(options_with_5s[:3]):
+                    try:
+                        tag = opt.tag_name
+                        visible = opt.is_displayed()
+                        opt_id = opt.get_attribute('id') or 'No ID'
+                        opt_text = opt.text or opt.get_attribute('textContent') or 'No text'
+                        print(f"  5s Element {i+1}: <{tag}> ID='{opt_id}' '{opt_text}' | Visible: {visible}")
+                    except Exception as opt_err:
+                        print(f"  5s Element {i+1}: <error getting details: {opt_err}>")
+        except Exception as debug_error:
+            print(f"⚠️ Option debug info error: {debug_error}")
+        
+        # Get all available options in the dropdown
+        try:
+            print(f"\n====== AVAILABLE OPTIONS CHECK ======")
+            # Try to get all mat-options in the current dropdown
+            all_mat_options = driver.find_elements(By.TAG_NAME, "mat-option")
+            print(f"📋 Found {len(all_mat_options)} total mat-option elements")
+            
+            if all_mat_options:
+                print(f"📋 Listing all available mat-options:")
+                for i, opt in enumerate(all_mat_options):
+                    try:
+                        opt_id = opt.get_attribute('id') or 'No ID'
+                        opt_text = opt.text or opt.get_attribute('textContent') or 'No text'
+                        print(f"  Option {i+1}: ID='{opt_id}', Text='{opt_text}'")
+                    except Exception as e:
+                        print(f"  Option {i+1}: Error getting details: {e}")
+        except Exception as e:
+            print(f"Error listing available options: {e}")
+            
+        # Now find and click the target duration option
+        print(f"\n====== OPTION SEARCH STARTING ======")
+        print(f"🔍 Looking for {target_duration} option{context_msg}...")
+        
+        option_strategies = [
+            # Strategy 1: Mat-option containing target duration text
+            (By.XPATH, f"//mat-option[contains(text(), '{target_duration}')]"),
+            # Strategy 2: Any option with specific class and target duration text
+            (By.XPATH, f"//*[contains(@class, 'mat-option') and contains(text(), '{target_duration}')]"),
+            # Strategy 3: Option role with target duration text
+            (By.XPATH, f"//*[@role='option' and contains(text(), '{target_duration}')]"),
+            # Strategy 4: Any clickable element containing target duration text in the overlay
+            (By.XPATH, f"//div[contains(@class, 'overlay')]//*[contains(text(), '{target_duration}')]"),
+            # Strategy 5: Broader search for target duration in any element
+            (By.XPATH, f"//*[contains(text(), '{target_duration}')]"),
+        ]
+        
+        option_selected = False
+        print(f"🔍 Will try {len(option_strategies)} different strategies to find the 5s option")
+        
+        for strategy_num, (by, selector) in enumerate(option_strategies, 1):
+            try:
+                print(f"\n🔍 Option Strategy #{strategy_num}: {by} '{selector}'")
+                
+                # Wait for option to be clickable
+                option = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((by, selector))
+                )
+                
+                # Try clicking the option
+                try:
+                    # Get detailed properties of the found option
+                    print(f"⭐ Found {target_duration} option to click with strategy {strategy_num}")
+                    try:
+                        option_text = option.text or option.get_attribute('textContent') or 'No text'
+                        option_id = option.get_attribute('id') or 'No ID'
+                        option_classes = option.get_attribute('class') or 'No class'
+                        option_value = option.get_attribute('value') or 'No value'
+                        option_visible = option.is_displayed()
+                        print(f"  ↳ ID: '{option_id}' | Text: '{option_text}' | Visible: {option_visible}")
+                        print(f"  ↳ Classes: '{option_classes}' | Value: '{option_value}'")
+                    except Exception as attr_error:
+                        print(f"  ↳ Error getting option attributes: {attr_error}")
+                    
+                    # Try regular click
+                    option.click()
+                    print(f"✅ {target_duration} option selected using strategy {strategy_num}")
+                    option_selected = True
+                    break
+                except Exception as click_error:
+                    print(f"⚠️ Standard click failed for option strategy {strategy_num}: {click_error}")
+                    # Try JavaScript click
+                    try:
+                        driver.execute_script("arguments[0].click();", option)
+                        print(f"✅ {target_duration} option selected using JavaScript for strategy {strategy_num}")
+                        option_selected = True
+                        break
+                    except Exception as js_error:
+                        print(f"⚠️ JavaScript click also failed for option strategy {strategy_num}: {js_error}")
+                        continue
+                        
+            except TimeoutException:
+                print(f"Option strategy {strategy_num} - element not found")
+                continue
+            except Exception as e:
+                print(f"Option strategy {strategy_num} failed: {e}")
+                continue
+        
+        if option_selected:
+            print(f"✅ Successfully selected {target_duration} duration{context_msg}")
+            time.sleep(1)  # Brief wait for selection to register
+            return True
+        else:
+            print(f"⚠️ Warning: Could not find or select {target_duration} option{context_msg}. Continuing with current setting...")
+            
+            # Debug: Show available options
+            try:
+                all_options = driver.find_elements(By.CSS_SELECTOR, "mat-option, [role='option']")
+                print(f"Debug: Found {len(all_options)} total options")
+                for i, opt in enumerate(all_options[:10]):  # Show first 10 options
+                    try:
+                        text = opt.text or opt.get_attribute('textContent') or 'No text'
+                        option_id = opt.get_attribute('id') or 'No ID'
+                        print(f"  Option {i+1}: '{text}' | ID: '{option_id}'")
+                    except:
+                        pass
+            except:
+                print("Could not debug available options")
+            
+            return False
+        
+    except Exception as e:
+        print(f"⚠️ Error during dropdown selection{context_msg}: {e}")
+        return False
+
 def process_scene(driver, wait, scene_data, scene_images):
     """Process a single scene: upload images and prompt, then run"""
     global current_account, global_driver, global_wait
@@ -474,52 +933,33 @@ def process_scene(driver, wait, scene_data, scene_images):
         print("Prompt entered.")
         time.sleep(1)
         
+        # Select dropdown (8s -> random duration) before clicking Run button
+        print("\n===== 🔽 ATTEMPTING DROPDOWN SELECTION BEFORE RUN =====")
+        # Pick a random duration between 5s, 6s, and 7s
+        duration_options = ['5s', '6s', '7s']
+        selected_duration = random.choice(duration_options)
+        print(f"🎲 Randomly selected {selected_duration} for this attempt")
+        select_dropdown_option(driver, wait, target_duration=selected_duration)
+        print("===== DROPDOWN SELECTION ATTEMPT COMPLETE =====\n")
+        
         # Click the Run button with retry logic
         print("Clicking Run button with retry logic...")
-        # print("🔄 Auto-reload: Page will reload every 1 failed attempts to reset state")
-        print(f"🔄 Account Switch: Alternates every {SWITCH_ACCOUNT_AFTER_RETRIES + 1} attempts between primary ↔ backup")
+        if ENABLE_PAGE_RELOAD:
+            print(f"🔄 Auto-reload: Page will reload every {PAGE_RELOAD_INTERVAL} failed attempts to reset state")
+        print(f"🔄 Account Switch: Will alternate accounts every {SWITCH_ACCOUNT_AFTER_RETRIES} failed attempts")
         
-        # First, check for and dismiss any overlays that might be blocking the Run button
-        try:
-            print("Checking for and dismissing any overlays...")
-            
-            # Look for overlay backdrops
-            overlays = driver.find_elements(By.CSS_SELECTOR, ".cdk-overlay-backdrop, .mat-overlay-backdrop, .backdrop")
-            if overlays:
-                print(f"Found {len(overlays)} overlay(s), attempting to dismiss...")
-                for i, overlay in enumerate(overlays):
-                    try:
-                        # Try clicking the overlay to dismiss it
-                        driver.execute_script("arguments[0].click();", overlay)
-                        print(f"Clicked overlay {i+1}")
-                        time.sleep(0.5)
-                    except:
-                        pass
-                
-                # Also try pressing Escape to dismiss any modals
-                driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
-                print("Sent Escape key to dismiss any modals")
-                time.sleep(1)
-            
-            # Look for any open menus or dropdowns and close them
-            open_menus = driver.find_elements(By.CSS_SELECTOR, ".mat-mdc-menu-panel, .mat-menu-panel, [role='menu']")
-            if open_menus:
-                print(f"Found {len(open_menus)} open menu(s), dismissing...")
-                driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
-                time.sleep(1)
-                
-        except Exception as overlay_error:
-            print(f"Error while dismissing overlays: {overlay_error}")
+        # Use simplified overlay handling
+        handle_overlay_simple()
         
-        max_retries = 50  # Max retries per scene before giving up
+        max_retries = MAX_RETRIES_PER_SCENE  # Max retries per scene before giving up
         
         for attempt in range(max_retries):
             print(f"Attempt {attempt + 1}/{max_retries}: Clicking the 'Run' button... [Account: {current_account}]")
             
-            # Check if we need to switch accounts after SWITCH_ACCOUNT_AFTER_RETRIES retries
-            # Switch accounts every SWITCH_ACCOUNT_AFTER_RETRIES attempts (alternating pattern)
-            if attempt > 0 and (attempt + 1) % (SWITCH_ACCOUNT_AFTER_RETRIES + 1) == 0:
-                print(f"\n🔄 SWITCHING ACCOUNTS after {SWITCH_ACCOUNT_AFTER_RETRIES + 1} attempts (attempt {attempt + 1})...")
+            # Check if we need to switch accounts every SWITCH_ACCOUNT_AFTER_RETRIES retries
+            # Switch at: SWITCH_ACCOUNT_AFTER_RETRIES, 2*SWITCH_ACCOUNT_AFTER_RETRIES, 3*SWITCH_ACCOUNT_AFTER_RETRIES, etc.
+            if attempt > 0 and attempt % SWITCH_ACCOUNT_AFTER_RETRIES == 0:
+                print(f"\n🔄 SWITCHING ACCOUNTS after {attempt} failed attempts (every {SWITCH_ACCOUNT_AFTER_RETRIES} retries)...")
                 
                 # Switch to the other persistent browser
                 new_driver, new_wait = switch_to_backup_account()
@@ -565,20 +1005,30 @@ def process_scene(driver, wait, scene_data, scene_images):
                     except Exception as prompt_error:
                         print(f"Warning: Failed to re-enter prompt in {current_account} browser: {prompt_error}")
                     
+                    # Re-select dropdown option after account switch
+                    print(f"\n===== 🔽 ATTEMPTING DROPDOWN SELECTION IN {current_account.upper()} BROWSER =====")
+                    # Pick a random duration between 5s, 6s, and 7s
+                    duration_options = ['5s', '6s', '7s']
+                    selected_duration = random.choice(duration_options)
+                    print(f"🎲 Randomly selected {selected_duration} for this account switch attempt")
+                    select_dropdown_option(driver, wait, f"in {current_account} browser", target_duration=selected_duration)
+                    print(f"===== DROPDOWN SELECTION ATTEMPT COMPLETE IN {current_account.upper()} =====\n")
+                    
                     print(f"{current_account.capitalize()} browser setup completed. Continuing with retry...")
                     
                 except Exception as setup_error:
                     print(f"Error setting up {current_account} browser: {setup_error}")
                     return False  # Fail this scene if account switch fails
             
-            # # Show reload schedule information
-            # if (attempt + 1) % 1 == 0:
-            #     print(f"📅 Note: Page reload will occur after this attempt if it fails. [Account: {current_account}]")
-            # elif attempt > 0:
-            #     next_reload = 1 - ((attempt + 1) % 1)
-            #     if next_reload == 1:
-            #         next_reload = 1
-            #     print(f"📅 Next page reload in {next_reload} attempts if needed. [Account: {current_account}]")
+            # Show reload schedule information only if page reload is enabled
+            if ENABLE_PAGE_RELOAD:
+                if (attempt + 1) % PAGE_RELOAD_INTERVAL == 0:
+                    print(f"📅 Note: Page reload will occur after this attempt if it fails. [Account: {current_account}]")
+                elif attempt > 0:
+                    next_reload = PAGE_RELOAD_INTERVAL - ((attempt + 1) % PAGE_RELOAD_INTERVAL)
+                    if next_reload == PAGE_RELOAD_INTERVAL:
+                        next_reload = PAGE_RELOAD_INTERVAL
+                    print(f"📅 Next page reload in {next_reload} attempts if needed. [Account: {current_account}]")
             
             try:
                 # Try multiple approaches to click the Run button
@@ -589,7 +1039,14 @@ def process_scene(driver, wait, scene_data, scene_images):
                     run_button.click()
                     print("Run button clicked (standard method).")
                 except Exception as click_error:
-                    print(f"Standard click failed: {click_error}")
+                    error_type = categorize_error(click_error)
+                    print(f"Standard click failed ({error_type.value}): {click_error}")
+                    
+                    # Handle click interception specifically
+                    if error_type == ErrorType.CLICK_INTERCEPTED:
+                        print("🔍 Overlay detected blocking click - performing overlay dismissal...")
+                        handle_overlay_simple()
+                        time.sleep(1)
                     
                     # Method 2: Scroll into view and click
                     try:
@@ -623,11 +1080,12 @@ def process_scene(driver, wait, scene_data, scene_images):
 
             try:
                 # Check for an error message within 5 seconds
-                error_message_xpath = "//*[contains(., 'Failed to generate video, quota exceeded') or contains(., 'Failed to generate video: permission denied. Please try again.') or contains(., 'Failed to') ]"
+                error_message_xpath = "//*[contains(., 'Failed to generate video, quota exceeded') or contains(., 'Failed to')]"
                 WebDriverWait(driver, 100).until(EC.visibility_of_element_located((By.XPATH, error_message_xpath)))
                 
                 # Error detected - handle dismissal and retry
-                print("Error detected. Beginning dismissal and retry process.")
+                error_type = categorize_error("quota exceeded")  # Detect specific error type
+                print(f"Error detected ({error_type.value}). Beginning dismissal and retry process.")
                 try:
                     dismiss_button_xpath = "//button[contains(., 'Dismiss') or contains(., 'OK') or @aria-label='Close']"
                     dismiss_button = WebDriverWait(driver, 2).until(EC.element_to_be_clickable((By.XPATH, dismiss_button_xpath)))
@@ -648,63 +1106,80 @@ def process_scene(driver, wait, scene_data, scene_images):
                 except TimeoutException:
                     print("Warning: The error popup may not have closed correctly.")
 
-                wait_time = random.randint(16, 22)  # Random wait between 10 and 20 seconds
-                print(f"Waiting for 16 seconds before retry attempt {attempt + 2}...")
-                time.sleep(wait_time)
+                print(f"Waiting {RETRY_WAIT_TIME} seconds before retry attempt {attempt + 2}...")
                 
-                # # Page reload functionality after every 2 retry attempts
-                # if (attempt + 1) % 1 == 0 and attempt < max_retries - 1:
-                #     print(f"\n🔄 Performing page reload after {attempt + 1} attempts to reset page state...")
-                #     try:
-                #         # Save current scene data for re-entry after reload
-                #         current_prompt = prompt_text
-                #         current_scene_images = scene_images
+                # Add some randomness to wait time to appear more human-like
+                actual_wait = random.randint(int(RETRY_WAIT_TIME * 0.8), int(RETRY_WAIT_TIME * 1.2))
+                time.sleep(actual_wait)
+                
+                # Pick a new random duration for the next attempt
+                duration_options = ['5s', '6s', '7s']
+                selected_duration = random.choice(duration_options)
+                print(f"🎲 Randomly selecting {selected_duration} for next retry attempt")
+                select_dropdown_option(driver, wait, f"for retry #{attempt + 2}", target_duration=selected_duration)
+                
+                # Page reload functionality (only if enabled)
+                if ENABLE_PAGE_RELOAD and (attempt + 1) % PAGE_RELOAD_INTERVAL == 0 and attempt < max_retries - 1:
+                    print(f"\n🔄 Performing page reload after {attempt + 1} attempts to reset page state...")
+                    try:
+                        # Save current scene data for re-entry after reload
+                        current_prompt = prompt_text
+                        current_scene_images = scene_images
                         
-                #         # Reload the page
-                #         driver.refresh()
-                #         print("Page reloaded successfully.")
-                #         time.sleep(5)  # Wait for page to load
+                        # Reload the page
+                        driver.refresh()
+                        print("Page reloaded successfully.")
+                        time.sleep(5)  # Wait for page to load
                         
-                #         # Navigate back to Veo if needed
-                #         if "gen-media" not in driver.current_url:
-                #             driver.get("https://aistudio.google.com/gen-media")
-                #             time.sleep(3)
+                        # Navigate back to Veo if needed
+                        if "gen-media" not in driver.current_url:
+                            driver.get("https://aistudio.google.com/gen-media")
+                            time.sleep(3)
                         
-                #         # Re-select Veo button if needed
-                #         try:
-                #             veo_button = WebDriverWait(driver, 5).until(
-                #                 EC.element_to_be_clickable((By.XPATH, "//mat-card[@aria-label='Veo']"))
-                #             )
-                #             veo_button.click()
-                #             print("Veo button re-selected after reload.")
-                #             time.sleep(2)
-                #         except TimeoutException:
-                #             print("Veo button not found after reload, continuing...")
+                        # Re-select Veo button if needed
+                        try:
+                            veo_button = WebDriverWait(driver, 5).until(
+                                EC.element_to_be_clickable((By.XPATH, "//mat-card[@aria-label='Veo']"))
+                            )
+                            veo_button.click()
+                            print("Veo button re-selected after reload.")
+                            time.sleep(2)
+                        except TimeoutException:
+                            print("Veo button not found after reload, continuing...")
                         
-                #         # Re-upload images if they were previously uploaded
-                #         if current_scene_images:
-                #             print(f"Re-uploading {len(current_scene_images)} images after page reload...")
-                #             upload_success = upload_images_to_veo(driver, wait, current_scene_images)
-                #             if upload_success:
-                #                 print("Images re-uploaded successfully after reload.")
-                #             else:
-                #                 print("Warning: Failed to re-upload images after reload, continuing with text-only...")
+                        # Re-upload images if they were previously uploaded
+                        if current_scene_images:
+                            print(f"Re-uploading {len(current_scene_images)} images after page reload...")
+                            upload_success = upload_images_to_veo(driver, wait, current_scene_images)
+                            if upload_success:
+                                print("Images re-uploaded successfully after reload.")
+                            else:
+                                print("Warning: Failed to re-upload images after reload, continuing with text-only...")
                         
-                #         # Re-enter the prompt
-                #         try:
-                #             prompt_input = wait.until(EC.visibility_of_element_located((By.TAG_NAME, "textarea")))
-                #             prompt_input.clear()
-                #             prompt_input.send_keys(current_prompt)
-                #             print("Prompt re-entered after page reload.")
-                #             time.sleep(1)
-                #         except Exception as prompt_error:
-                #             print(f"Warning: Failed to re-enter prompt after reload: {prompt_error}")
+                        # Re-enter the prompt
+                        try:
+                            prompt_input = wait.until(EC.visibility_of_element_located((By.TAG_NAME, "textarea")))
+                            prompt_input.clear()
+                            prompt_input.send_keys(current_prompt)
+                            print("Prompt re-entered after page reload.")
+                            time.sleep(1)
+                        except Exception as prompt_error:
+                            print(f"Warning: Failed to re-enter prompt after reload: {prompt_error}")
                         
-                #         print("Page reload and setup completed. Continuing with retry...")
+                        # Select a random duration for this attempt after reload
+                        try:
+                            duration_options = ['5s', '6s', '7s']
+                            selected_duration = random.choice(duration_options)
+                            print(f"🎲 Randomly selecting {selected_duration} after page reload")
+                            select_dropdown_option(driver, wait, "after page reload", target_duration=selected_duration)
+                        except Exception as dropdown_error:
+                            print(f"Warning: Failed to select duration dropdown after reload: {dropdown_error}")
                         
-                    # except Exception as reload_error:
-                    #     print(f"Error during page reload: {reload_error}")
-                    #     print("Continuing with normal retry process...")
+                        print("Page reload and setup completed. Continuing with retry...")
+                        
+                    except Exception as reload_error:
+                        print(f"Error during page reload: {reload_error}")
+                        print("Continuing with normal retry process...")
                 
                 if attempt == max_retries - 1:
                     print("Maximum retries reached. Could not generate video for this scene.")
@@ -720,7 +1195,7 @@ def process_scene(driver, wait, scene_data, scene_images):
                 # Optionally check for video generation completion
                 try:
                     print("Checking for video generation...")
-                    video_wait = WebDriverWait(driver, 200)  # Wait up to 2 minute for video
+                    video_wait = WebDriverWait(driver, VIDEO_GENERATION_TIMEOUT)
                     video_wait.until(EC.presence_of_element_located((By.TAG_NAME, "video")))
                     print("Video has been generated successfully for this scene.")
                     
@@ -746,13 +1221,328 @@ def process_scene(driver, wait, scene_data, scene_images):
         print(f"Error processing scene {scene_num}: {e}")
         return False
 
+def save_checkpoint(successful_scenes, current_scene_index, total_scenes):
+    """Save current progress to checkpoint file"""
+    try:
+        checkpoint_data = {
+            "successful_scenes": successful_scenes,
+            "current_scene_index": current_scene_index,
+            "total_scenes": total_scenes,
+            "timestamp": time.time(),
+            "last_account": current_account
+        }
+        
+        checkpoint_path = os.path.join(os.path.expanduser("~"), "Downloads", CHECKPOINT_FILE)
+        with open(checkpoint_path, 'w') as f:
+            json.dump(checkpoint_data, f, indent=2)
+        
+        print(f"💾 Checkpoint saved: {successful_scenes}/{total_scenes} scenes completed")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving checkpoint: {e}")
+        return False
+
+def load_checkpoint():
+    """Load progress from checkpoint file"""
+    try:
+        checkpoint_path = os.path.join(os.path.expanduser("~"), "Downloads", CHECKPOINT_FILE)
+        if not os.path.exists(checkpoint_path):
+            print("📍 No checkpoint found - starting from beginning")
+            return None
+            
+        with open(checkpoint_path, 'r') as f:
+            checkpoint_data = json.load(f)
+        
+        print(f"📍 Checkpoint loaded: {checkpoint_data['successful_scenes']}/{checkpoint_data['total_scenes']} scenes completed")
+        print(f"📍 Resuming from scene {checkpoint_data['current_scene_index'] + 1}")
+        return checkpoint_data
+    except Exception as e:
+        print(f"❌ Error loading checkpoint: {e}")
+        return None
+
+def clear_checkpoint():
+    """Remove checkpoint file when workflow is complete"""
+    try:
+        checkpoint_path = os.path.join(os.path.expanduser("~"), "Downloads", CHECKPOINT_FILE)
+        if os.path.exists(checkpoint_path):
+            os.remove(checkpoint_path)
+            print("🗑️ Checkpoint cleared - workflow complete")
+    except Exception as e:
+        print(f"❌ Error clearing checkpoint: {e}")
+
+def restart_script_after_pause():
+    """Restart the script after closing browsers and waiting"""
+    
+    print(f"\n🔄 RESTART SEQUENCE: Closing browsers and restarting script...")
+    
+    # Clean up current browser instances
+    cleanup_browsers()
+    
+    # Wait for the specified pause duration
+    pause_minutes = RESTART_PAUSE_MINUTES
+    print(f"⏳ Waiting {pause_minutes} minutes before restart...")
+    
+    # Show countdown timer
+    pause_seconds = pause_minutes * 60
+    for remaining in range(pause_seconds, 0, -60):
+        mins_left = remaining // 60
+        if remaining % 60 == 0:  # Only show at minute intervals
+            print(f"⏳ {mins_left} minute(s) remaining...")
+        time.sleep(60)
+    
+    print("🚀 Restarting script with fresh browser instances...")
+    
+    # Restart the script
+    python_executable = sys.executable
+    script_path = __file__
+    subprocess.Popen([python_executable, script_path])
+    
+    # Exit current instance
+    sys.exit(0)
+
+def get_user_scene_selection(total_scenes):
+    """Get user input for scene range selection"""
+    print(f"\n🎬 Scene Selection")
+    print(f"📋 Total scenes available: {total_scenes}")
+    print("="*50)
+    
+    while True:
+        try:
+            print("\nChoose an option:")
+            print("1️⃣  Process ALL scenes (1 to {})".format(total_scenes))
+            print("2️⃣  Process SPECIFIC RANGE (e.g., scenes 3 to 8)")
+            print("3️⃣  Process SINGLE SCENE (e.g., scene 5)")
+            print("4️⃣  Continue from LAST CHECKPOINT")
+            print("5️⃣  EXIT script")
+            
+            choice = input("\nEnter your choice (1-5): ").strip()
+            
+            if choice == "1":
+                # Process all scenes
+                return 1, total_scenes, "all"
+            
+            elif choice == "2":
+                # Process specific range
+                while True:
+                    try:
+                        range_input = input(f"\nEnter range (e.g., '3-8' or '3 to 8'): ").strip()
+                        # Handle different input formats
+                        if '-' in range_input:
+                            start_str, end_str = range_input.split('-')
+                        elif ' to ' in range_input.lower():
+                            start_str, end_str = range_input.lower().split(' to ')
+                        elif ',' in range_input:
+                            start_str, end_str = range_input.split(',')
+                        else:
+                            print("❌ Invalid format. Use formats like '3-8' or '3 to 8'")
+                            continue
+                        
+                        start_scene = int(start_str.strip())
+                        end_scene = int(end_str.strip())
+                        
+                        if start_scene < 1 or end_scene > total_scenes:
+                            print(f"❌ Scene numbers must be between 1 and {total_scenes}")
+                            continue
+                        
+                        if start_scene > end_scene:
+                            print("❌ Start scene must be less than or equal to end scene")
+                            continue
+                        
+                        return start_scene, end_scene, "range"
+                    
+                    except ValueError:
+                        print("❌ Please enter valid numbers")
+                        continue
+            
+            elif choice == "3":
+                # Process single scene
+                while True:
+                    try:
+                        scene_num = int(input(f"\nEnter scene number (1-{total_scenes}): ").strip())
+                        
+                        if scene_num < 1 or scene_num > total_scenes:
+                            print(f"❌ Scene number must be between 1 and {total_scenes}")
+                            continue
+                        
+                        return scene_num, scene_num, "single"
+                    
+                    except ValueError:
+                        print("❌ Please enter a valid number")
+                        continue
+            
+            elif choice == "4":
+                # Continue from checkpoint
+                return None, None, "checkpoint"
+            
+            elif choice == "5":
+                # Exit
+                print("👋 Exiting script...")
+                return None, None, "exit"
+            
+            else:
+                print("❌ Invalid choice. Please enter 1, 2, 3, 4, or 5")
+                continue
+        
+        except KeyboardInterrupt:
+            print("\n\n👋 Script cancelled by user")
+            return None, None, "exit"
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            continue
+
+def display_scene_summary(scenes, start_idx, end_idx):
+    """Display a summary of selected scenes"""
+    print(f"\n📋 Selected Scene Summary:")
+    print("="*60)
+    
+    selected_scenes = scenes[start_idx-1:end_idx]
+    
+    for i, scene_data in enumerate(selected_scenes, start_idx):
+        scene_num = scene_data.get('scene_number', i)
+        scene_title = scene_data.get('scene_title', 'Untitled')
+        
+        # Check for images
+        scene_images = find_scene_images(scene_num)
+        image_count = len(scene_images)
+        
+        print(f"Scene {i:2d}: {scene_title}")
+        print(f"         Images: {image_count} found")
+        
+        # Show preview of prompt
+        prompt = create_combined_prompt(scene_data)
+        preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
+        print(f"         Prompt: {preview}")
+        print()
+    
+    print("="*60)
+    print(f"📊 Total scenes to process: {end_idx - start_idx + 1}")
+    
+    # Confirm with user
+    while True:
+        confirm = input("\n✅ Proceed with these scenes? (y/n): ").strip().lower()
+        if confirm in ['y', 'yes']:
+            return True
+        elif confirm in ['n', 'no']:
+            return False
+        else:
+            print("Please enter 'y' or 'n'")
+
+def send_gmail_notification(subject, message, successful_scenes, total_scenes, duration_minutes=None):
+    """Send Gmail notification when script finishes"""
+    
+    # Check if notifications are enabled
+    try:
+        if not ENABLE_EMAIL_NOTIFICATIONS:
+            print("📧 Email notifications disabled in config")
+            return False
+    except NameError:
+        print("📧 Email notifications not configured")
+        return False
+    
+    try:
+        # Get notification settings with fallbacks
+        try:
+            sender_email = NOTIFICATION_EMAIL
+        except NameError:
+            sender_email = GOOGLE_EMAIL
+            
+        try:
+            app_password = NOTIFICATION_APP_PASSWORD
+        except NameError:
+            app_password = None
+            
+        try:
+            recipient_email = NOTIFICATION_RECIPIENT
+        except NameError:
+            recipient_email = GOOGLE_EMAIL
+            
+        try:
+            smtp_server = GMAIL_SMTP_SERVER
+        except NameError:
+            smtp_server = 'smtp.gmail.com'
+            
+        try:
+            smtp_port = GMAIL_SMTP_PORT
+        except NameError:
+            smtp_port = 587
+        
+        # Validate required settings
+        if not app_password or app_password == "your_gmail_app_password_here":
+            print("❌ Gmail notification failed: NOTIFICATION_APP_PASSWORD not configured")
+            print("ℹ️  To enable notifications:")
+            print("   1. Go to Google Account Security settings")
+            print("   2. Enable 2-Step Verification")
+            print("   3. Generate an App Password for this script")
+            print("   4. Update NOTIFICATION_APP_PASSWORD in config.py")
+            return False
+            
+        print("📧 Sending Gmail notification...")
+        
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = recipient_email
+        msg['Subject'] = subject
+        
+        # Create detailed message body
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        body = f"""
+Story-to-Video Workflow Completed
+=================================
+
+🎬 Results Summary:
+   • Successfully processed: {successful_scenes}/{total_scenes} scenes
+   • Completion rate: {(successful_scenes/total_scenes*100):.1f}%
+   • Finished at: {timestamp}
+"""
+        
+        if duration_minutes:
+            body += f"   • Total duration: {duration_minutes:.1f} minutes\n"
+            
+        body += f"""
+📊 Processing Details:
+   • Final account used: {current_account}
+   • Script location: {os.path.abspath(__file__)}
+   
+{message}
+
+---
+Automated notification from Story-to-Video Workflow
+"""
+
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # Connect to Gmail SMTP server
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()  # Enable encryption
+        server.login(sender_email, app_password)
+        
+        # Send email
+        text = msg.as_string()
+        server.sendmail(sender_email, recipient_email, text)
+        server.quit()
+        
+        print(f"✅ Gmail notification sent to {recipient_email}")
+        return True
+        
+    except smtplib.SMTPAuthenticationError:
+        print("❌ Gmail notification failed: Authentication error")
+        print("ℹ️  Please check your NOTIFICATION_EMAIL and NOTIFICATION_APP_PASSWORD settings")
+        return False
+    except Exception as e:
+        print(f"❌ Gmail notification failed: {e}")
+        return False
+
 # --- Main Script ---
 def main():
     global current_account, global_driver, global_wait
     
+    # Track start time for duration calculation
+    start_time = datetime.now()
+    
     # Validate configuration before proceeding
     if not validate_configuration():
-        print("❌ Configuration validation failed. Please fix the issues before running the workflow.")
+        print("Configuration validation failed. Please fix the issues before running the workflow.")
         return
     
     # Load scene data
@@ -761,26 +1551,81 @@ def main():
         print("No scene data found. Please run the scene extractor first.")
         return
 
+    # Get user scene selection
+    total_scenes = len(scenes)
+    start_scene, end_scene, selection_type = get_user_scene_selection(total_scenes)
+    
+    # Handle user choice
+    if selection_type == "exit":
+        return
+    
+    # Handle checkpoint continuation
+    if selection_type == "checkpoint":
+        checkpoint = load_checkpoint()
+        if checkpoint:
+            successful_scenes = checkpoint['successful_scenes'] 
+            starting_scene_index = checkpoint['current_scene_index'] + 1
+            end_scene_index = total_scenes
+            print(f"📍 Continuing from checkpoint: {successful_scenes} videos completed")
+            print(f"📍 Will process scenes {starting_scene_index} to {total_scenes}")
+        else:
+            print("❌ No checkpoint found. Please select a different option.")
+            return
+    else:
+        # User selected specific range
+        starting_scene_index = start_scene
+        end_scene_index = end_scene
+        successful_scenes = 0
+        
+        # Display summary and get confirmation
+        if not display_scene_summary(scenes, start_scene, end_scene):
+            print("👋 Operation cancelled by user")
+            return
+        
+        # Clear any existing checkpoint since we're doing a custom range
+        clear_checkpoint()
+
+    # Validate backup credentials
+    if BACKUP_EMAIL == "your_backup_email@gmail.com" or BACKUP_PASSWORD == "your_backup_password":
+        print("⚠️  WARNING: Backup credentials not configured!")
+        print("Please update BACKUP_EMAIL and BACKUP_PASSWORD in your config.py file.")
+        print("Account switching will be disabled.")
+    else:
+        print(f"✅ Backup account configured: {BACKUP_EMAIL}")
+    
     # Initialize persistent browser instances for both accounts
-    print("\n🚀 Initializing persistent browser instances...")
+    print("🚀 Initializing persistent browser instances...")
     if not initialize_both_browsers():
         print("❌ Failed to initialize browsers. Exiting.")
         return
 
     try:
-        # Process each scene sequentially using persistent browsers
-        successful_scenes = 0
-        total_scenes = len(scenes)
+        # Prepare scenes to process based on selection
+        if selection_type == "checkpoint":
+            scenes_to_process = scenes[starting_scene_index-1:]
+            actual_total = total_scenes
+        else:
+            scenes_to_process = scenes[starting_scene_index-1:end_scene_index]
+            actual_total = end_scene_index
         
-        print(f"\n🎬 Starting video generation for {total_scenes} scenes")
-        print(f"🔄 Account switching enabled: alternates every {SWITCH_ACCOUNT_AFTER_RETRIES + 1} attempts")
-        print(f"   - Attempts 1-{SWITCH_ACCOUNT_AFTER_RETRIES + 1}: primary account")
-        print(f"   - Attempts {SWITCH_ACCOUNT_AFTER_RETRIES + 2}-{(SWITCH_ACCOUNT_AFTER_RETRIES + 1) * 2}: backup account")
-        print(f"   - Attempts {(SWITCH_ACCOUNT_AFTER_RETRIES + 1) * 2 + 1}-{(SWITCH_ACCOUNT_AFTER_RETRIES + 1) * 3}: primary account (and so on...)")
+        print(f"\n🎬 Video generation: Processing scenes {starting_scene_index} to {end_scene_index}")
+        print(f"🔄 Account switching enabled every {SWITCH_ACCOUNT_AFTER_RETRIES} retries per scene")
+        print(f"🔄 Auto-restart: Script will restart after every {RESTART_AFTER_VIDEOS} successful videos (pause: {RESTART_PAUSE_MINUTES} min)")
         
-        for i, scene_data in enumerate(scenes, 1):
-            scene_num = scene_data.get('scene_number', i)
-            print(f"\n--- Processing Scene {i}/{total_scenes} (Scene #{scene_num}) ---")
+        print(f"📋 Processing {len(scenes_to_process)} scenes total")
+        
+        # --- User Scene Selection ---
+        
+        # Process each scene in the selected range
+        for relative_i, scene_data in enumerate(scenes_to_process):
+            # Calculate actual scene number based on selection type
+            if selection_type == "checkpoint":
+                actual_i = starting_scene_index + relative_i
+            else:
+                actual_i = starting_scene_index + relative_i
+            
+            scene_num = scene_data.get('scene_number', actual_i)
+            print(f"\n--- Processing Scene {actual_i}/{end_scene_index} (Scene #{scene_num}) ---")
             
             # Find images for this scene
             scene_images = find_scene_images(scene_num)
@@ -792,39 +1637,91 @@ def main():
                 successful_scenes += 1
                 print(f"Scene {scene_num} processed successfully using {current_account} account.")
                 
-                # Wait between scenes to avoid rate limiting
-                if i < total_scenes:
-                    print("Waiting 30 seconds before next scene...")
-                    time.sleep(30)
+                # Save checkpoint after each successful scene (only for full workflow)
+                if selection_type in ["checkpoint", "all"]:
+                    save_checkpoint(successful_scenes, actual_i - 1, actual_total)
+                
+                # Check if we need to restart after every RESTART_AFTER_VIDEOS successful videos
+                if successful_scenes % RESTART_AFTER_VIDEOS == 0 and actual_i < end_scene_index:
+                    print(f"\n🔄 RESTART TRIGGER: Successfully completed {successful_scenes} videos!")
+                    print(f"📍 Current progress: Scene {actual_i}/{end_scene_index} completed")
+                    print(f"📍 Next resume point: Scene {actual_i+1}/{end_scene_index}")
+                    
+                    # Trigger restart sequence (closes browsers, waits, restarts script)
+                    restart_script_after_pause()
+                    
+                # Regular wait between scenes (if not at restart interval)
+                elif actual_i < end_scene_index:
+                    print(f"Waiting {SCENE_WAIT_TIME} seconds before next scene...")
+                    time.sleep(SCENE_WAIT_TIME)
             else:
                 print(f"Failed to process scene {scene_num} after retries. Continuing with next scene...")
                 
-                # Take a screenshot for debugging this specific scene failure
-                try:
-                    screenshot_path = os.path.join(DOWNLOAD_DIR, f"debug_scene_{scene_num}_failure_{current_account}_{int(time.time())}.png")
-                    global_driver.save_screenshot(screenshot_path)
-                    print(f"Scene failure screenshot saved to: {screenshot_path}")
-                except:
-                    print("Could not save scene failure screenshot.")
+                # Save debug screenshot for scene failure
+                save_debug_screenshot(f"scene_{scene_num}_failure")
                 
                 time.sleep(10)  # Brief wait before next scene
         
         print(f"\n=== Processing Complete ===")
-        print(f"Successfully processed {successful_scenes}/{total_scenes} scenes.")
+        print(f"Successfully processed {successful_scenes}/{len(scenes_to_process)} selected scenes.")
+        print(f"Scene range: {starting_scene_index} to {end_scene_index}")
         print(f"Final account used: {current_account}")
+        
+        # Calculate total duration
+        end_time = datetime.now()
+        duration_seconds = (end_time - start_time).total_seconds()
+        duration_minutes = duration_seconds / 60
+        
+        print(f"Total processing time: {duration_minutes:.1f} minutes")
+        
+        # Clear checkpoint after successful run (only for full workflows)
+        if selection_type in ["checkpoint", "all"]:
+            clear_checkpoint()
+        
+        # Send Gmail notification on completion
+        notification_subject = f"✅ Story-to-Video Workflow Complete - {successful_scenes}/{len(scenes_to_process)} scenes processed"
+        notification_message = f"Workflow completed successfully with {(successful_scenes/len(scenes_to_process)*100):.1f}% success rate."
+        
+        send_gmail_notification(
+            subject=notification_subject,
+            message=notification_message, 
+            successful_scenes=successful_scenes,
+            total_scenes=len(scenes_to_process),
+            duration_minutes=duration_minutes
+        )
         
         print("Script finished. Waiting for a bit before closing.")
         time.sleep(10) # Wait to see the result
 
     except Exception as e:
-        print(f"An error occurred during execution: {e}")
-        # Take screenshot for debugging
+        error_type = categorize_error(e)
+        print(f"An error occurred during execution ({error_type.value}): {e}")
+        # Save debug screenshot for general error
+        save_debug_screenshot("general_error")
+        
+        # Send error notification
+        end_time = datetime.now()
+        duration_seconds = (end_time - start_time).total_seconds()
+        duration_minutes = duration_seconds / 60
+        
+        error_subject = f"❌ Story-to-Video Workflow Error - Script terminated unexpectedly"
+        error_message = f"Error occurred: {error_type.value} - {str(e)}"
+        
+        # Try to get successful scenes count
         try:
-            screenshot_path = os.path.join(DOWNLOAD_DIR, f"debug_error_{current_account}_{int(time.time())}.png")
-            global_driver.save_screenshot(screenshot_path)
-            print(f"Debug screenshot saved to: {screenshot_path}")
+            successful_count = successful_scenes if 'successful_scenes' in locals() else 0
+            total_count = len(scenes_to_process) if 'scenes_to_process' in locals() else 0
         except:
-            print("Could not save debug screenshot.")
+            successful_count = 0
+            total_count = 0
+        
+        send_gmail_notification(
+            subject=error_subject,
+            message=error_message,
+            successful_scenes=successful_count,
+            total_scenes=total_count,
+            duration_minutes=duration_minutes
+        )
         
     finally:
         print("🧹 Cleaning up persistent browser instances...")
@@ -838,13 +1735,13 @@ def validate_configuration():
     warnings = []
     
     # Check primary account credentials
-    if not GOOGLE_EMAIL or GOOGLE_EMAIL == "your_email@gmail.com":
-        issues.append("❌ Primary GOOGLE_EMAIL not configured")
+    if not GOOGLE_EMAIL or GOOGLE_EMAIL == "your_primary_email@gmail.com":
+        issues.append("❌ Primary GOOGLE_EMAIL not configured - update config.py")
     else:
         print(f"✅ Primary account: {GOOGLE_EMAIL}")
         
-    if not GOOGLE_PASSWORD or GOOGLE_PASSWORD == "your_password":
-        issues.append("❌ Primary GOOGLE_PASSWORD not configured")
+    if not GOOGLE_PASSWORD or GOOGLE_PASSWORD == "your_primary_password":
+        issues.append("❌ Primary GOOGLE_PASSWORD not configured - update config.py")
     else:
         print("✅ Primary password: ●●●●●●●●")
     
@@ -858,6 +1755,14 @@ def validate_configuration():
         warnings.append("⚠️ Backup password not configured - account switching disabled")
     else:
         print("✅ Backup password: ●●●●●●●●")
+    
+    # Check configuration settings
+    print(f"⚙️ Overlay handling: {OVERLAY_HANDLING}")
+    print(f"⚙️ Page reload: {'Enabled' if ENABLE_PAGE_RELOAD else 'Disabled'}")
+    print(f"⚙️ Max retries per scene: {MAX_RETRIES_PER_SCENE}")
+    print(f"⚙️ Account switch threshold: {SWITCH_ACCOUNT_AFTER_RETRIES}")
+    print(f"🔄 Auto-restart: {RESTART_AFTER_VIDEOS} videos")
+    print(f"⏰ Restart pause: {RESTART_PAUSE_MINUTES} minutes")
     
     # Check directories
     if os.path.exists(USER_DATA_DIR):
@@ -879,6 +1784,32 @@ def validate_configuration():
             issues.append(f"❌ Cannot create download directory: {e}")
     else:
         print(f"✅ Download directory: {DOWNLOAD_DIR}")
+    
+    # Check Gmail notification settings
+    try:
+        enable_notifications = ENABLE_EMAIL_NOTIFICATIONS
+    except NameError:
+        enable_notifications = False
+        
+    if enable_notifications:
+        try:
+            notification_email = NOTIFICATION_EMAIL
+        except NameError:
+            notification_email = None
+            
+        try:
+            app_password = NOTIFICATION_APP_PASSWORD
+        except NameError:
+            app_password = None
+        
+        if not notification_email or notification_email == "your_gmail_here@gmail.com":
+            warnings.append("⚠️ NOTIFICATION_EMAIL not configured - notifications will be disabled")
+        elif not app_password or app_password == "your_gmail_app_password_here":
+            warnings.append("⚠️ NOTIFICATION_APP_PASSWORD not configured - notifications will be disabled")
+        else:
+            print(f"📧 Gmail notifications: Enabled ({notification_email})")
+    else:
+        print("📧 Gmail notifications: Disabled")
     
     # Print results
     print("\n" + "="*50)
@@ -1162,31 +2093,11 @@ def switch_active_browser():
     print(f"🎯 Active browser: {current_account}")
     return True
 
-def cleanup_browsers():
-    """Clean up both browser instances"""
-    global primary_driver, backup_driver
-    
-    print("🧹 Cleaning up browser instances...")
-    
-    if primary_driver:
-        try:
-            primary_driver.quit()
-            print("✅ Primary browser closed")
-        except Exception as e:
-            print(f"⚠️ Error closing primary browser: {e}")
-    
-    if backup_driver:
-        try:
-            backup_driver.quit()
-            print("✅ Backup browser closed")
-        except Exception as e:
-            print(f"⚠️ Error closing backup browser: {e}")
-
 def switch_to_backup_account():
     """Switch to the other account using persistent browsers"""
     global current_account, global_driver, global_wait
     
-    print(f"\n🔄 SWITCHING ACCOUNTS after {SWITCH_ACCOUNT_AFTER_RETRIES} retries...")
+    print(f"🔄 Switching to alternate account...")
     
     # Use the fast browser switching instead of creating new instances
     if switch_active_browser():
@@ -1197,8 +2108,40 @@ def switch_to_backup_account():
         # Return current browser to continue with same account
         return global_driver, global_wait
 
+def cleanup_browsers():
+    """Properly closes both browser instances if they exist"""
+    global primary_driver, backup_driver, current_account
+    
+    print("🧹 Cleaning up browser instances...")
+    
+    try:
+        if primary_driver:
+            print("📴 Closing primary browser instance")
+            primary_driver.quit()
+    except Exception as e:
+        print(f"⚠️ Error closing primary browser: {e}")
+    
+    try:
+        if backup_driver:
+            print("📴 Closing backup browser instance")
+            backup_driver.quit()
+    except Exception as e:
+        print(f"⚠️ Error closing backup browser: {e}")
+    
+    # Reset global variables
+    primary_driver = None
+    backup_driver = None
+    current_account = "primary"
+    
+    print("✅ Browser cleanup complete")
 
-# Execute main function when script is run directly
+# Entry point for direct script execution
 if __name__ == "__main__":
-    main()
-
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n⚠️ Script interrupted by user (Ctrl+C)")
+        cleanup_browsers()
+    except Exception as e:
+        print(f"\n\n❌ Unhandled error: {e}")
+        cleanup_browsers()
