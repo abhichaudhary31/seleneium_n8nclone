@@ -11,9 +11,28 @@ from selenium.common.exceptions import TimeoutException
 
 # --- USER CONFIGURATION ---
 # IMPORTANT: Replace with your Google account credentials
+# Primary Account
 GOOGLE_EMAIL = "chaudharyabhishek031@gmail.com"
 GOOGLE_PASSWORD = "GAme++0103"
 USER_DATA_DIR = os.path.join(os.path.expanduser("~"), "selenium_chrome_profile")
+
+# Backup Account (used after 12 retries)
+BACKUP_EMAIL = "theladyinsaree@gmail.com"  # Replace with your backup email
+BACKUP_PASSWORD = "Stuti@0103"      # Replace with your backup password
+BACKUP_USER_DATA_DIR = os.path.join(os.path.expanduser("~"), "selenium_chrome_profile_backup")
+
+# Global account switching configuration
+SWITCH_ACCOUNT_AFTER_RETRIES = 1  # Switch accounts every N+1 attempts (e.g., 3 means switch every 4 attempts: 1-4 primary, 5-8 backup, 9-12 primary, etc.)
+current_account = "primary"  # Track which account is currently active
+
+# Persistent browser instances
+primary_driver = None    # Primary account browser instance
+primary_wait = None      # Primary account wait instance
+backup_driver = None     # Backup account browser instance  
+backup_wait = None       # Backup account wait instance
+global_driver = None     # Currently active driver
+global_wait = None       # Currently active wait
+
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "scene_videos")
 
 # Scene data and images directories
@@ -403,10 +422,17 @@ def upload_images_to_veo(driver, wait, image_paths):
         return False
 def process_scene(driver, wait, scene_data, scene_images):
     """Process a single scene: upload images and prompt, then run"""
+    global current_account, global_driver, global_wait
+    
     scene_num = scene_data.get('scene_number', 'Unknown')
     scene_title = scene_data.get('scene_title', 'Untitled')
     
     print(f"\n=== Processing Scene {scene_num}: {scene_title} ===")
+    print(f"🔄 Using {current_account} account")
+    
+    # Use global driver instances
+    driver = global_driver
+    wait = global_wait
     
     try:
         # Navigate to Veo if not already there
@@ -449,6 +475,8 @@ def process_scene(driver, wait, scene_data, scene_images):
         
         # Click the Run button with retry logic
         print("Clicking Run button with retry logic...")
+        print("🔄 Auto-reload: Page will reload every 2 failed attempts to reset state")
+        print(f"🔄 Account Switch: Alternates every {SWITCH_ACCOUNT_AFTER_RETRIES + 1} attempts between primary ↔ backup")
         
         # First, check for and dismiss any overlays that might be blocking the Run button
         try:
@@ -482,10 +510,74 @@ def process_scene(driver, wait, scene_data, scene_images):
         except Exception as overlay_error:
             print(f"Error while dismissing overlays: {overlay_error}")
         
-        max_retries = 50  # Reduced from 50 for scene processing
+        max_retries = 25  # Max retries per scene before giving up
         
         for attempt in range(max_retries):
-            print(f"Attempt {attempt + 1}/{max_retries}: Clicking the 'Run' button...")
+            print(f"Attempt {attempt + 1}/{max_retries}: Clicking the 'Run' button... [Account: {current_account}]")
+            
+            # Check if we need to switch accounts after SWITCH_ACCOUNT_AFTER_RETRIES retries
+            # Switch accounts every SWITCH_ACCOUNT_AFTER_RETRIES attempts (alternating pattern)
+            if attempt > 0 and (attempt + 1) % (SWITCH_ACCOUNT_AFTER_RETRIES + 1) == 0:
+                print(f"\n🔄 SWITCHING ACCOUNTS after {SWITCH_ACCOUNT_AFTER_RETRIES + 1} attempts (attempt {attempt + 1})...")
+                
+                # Switch to the other persistent browser
+                new_driver, new_wait = switch_to_backup_account()
+                
+                # Update driver references to the newly active browser
+                driver = new_driver
+                wait = new_wait
+                
+                # The browser is already logged in and ready - just ensure we're on the right page
+                if "gen-media" not in driver.current_url:
+                    driver.get("https://aistudio.google.com/gen-media")
+                    time.sleep(2)
+                
+                # Re-setup the scene in the switched browser
+                try:
+                    # Click the Veo button if needed
+                    try:
+                        veo_button = WebDriverWait(driver, 5).until(
+                            EC.element_to_be_clickable((By.XPATH, "//mat-card[@aria-label='Veo']"))
+                        )
+                        veo_button.click()
+                        print(f"Veo button clicked in {current_account} browser.")
+                        time.sleep(2)
+                    except TimeoutException:
+                        print(f"Veo button not found in {current_account} browser, continuing...")
+                    
+                    # Re-upload images if available
+                    if scene_images:
+                        print(f"Re-uploading {len(scene_images)} images in {current_account} browser...")
+                        upload_success = upload_images_to_veo(driver, wait, scene_images)
+                        if upload_success:
+                            print(f"Images uploaded successfully in {current_account} browser.")
+                        else:
+                            print(f"Warning: Failed to upload images in {current_account} browser, continuing with text-only...")
+                    
+                    # Re-enter the prompt
+                    try:
+                        prompt_input = wait.until(EC.visibility_of_element_located((By.TAG_NAME, "textarea")))
+                        prompt_input.clear()
+                        prompt_input.send_keys(prompt_text)
+                        print(f"Prompt re-entered in {current_account} browser.")
+                        time.sleep(1)
+                    except Exception as prompt_error:
+                        print(f"Warning: Failed to re-enter prompt in {current_account} browser: {prompt_error}")
+                    
+                    print(f"{current_account.capitalize()} browser setup completed. Continuing with retry...")
+                    
+                except Exception as setup_error:
+                    print(f"Error setting up {current_account} browser: {setup_error}")
+                    return False  # Fail this scene if account switch fails
+            
+            # Show reload schedule information
+            if (attempt + 1) % 2 == 0:
+                print(f"📅 Note: Page reload will occur after this attempt if it fails. [Account: {current_account}]")
+            elif attempt > 0:
+                next_reload = 2 - ((attempt + 1) % 2)
+                if next_reload == 2:
+                    next_reload = 2
+                print(f"📅 Next page reload in {next_reload} attempts if needed. [Account: {current_account}]")
             
             try:
                 # Try multiple approaches to click the Run button
@@ -558,6 +650,60 @@ def process_scene(driver, wait, scene_data, scene_images):
                 print(f"Waiting for 26 seconds before retry attempt {attempt + 2}...")
                 time.sleep(26)
                 
+                # Page reload functionality after every 2 retry attempts
+                if (attempt + 1) % 2 == 0 and attempt < max_retries - 1:
+                    print(f"\n🔄 Performing page reload after {attempt + 1} attempts to reset page state...")
+                    try:
+                        # Save current scene data for re-entry after reload
+                        current_prompt = prompt_text
+                        current_scene_images = scene_images
+                        
+                        # Reload the page
+                        driver.refresh()
+                        print("Page reloaded successfully.")
+                        time.sleep(5)  # Wait for page to load
+                        
+                        # Navigate back to Veo if needed
+                        if "gen-media" not in driver.current_url:
+                            driver.get("https://aistudio.google.com/gen-media")
+                            time.sleep(3)
+                        
+                        # Re-select Veo button if needed
+                        try:
+                            veo_button = WebDriverWait(driver, 5).until(
+                                EC.element_to_be_clickable((By.XPATH, "//mat-card[@aria-label='Veo']"))
+                            )
+                            veo_button.click()
+                            print("Veo button re-selected after reload.")
+                            time.sleep(2)
+                        except TimeoutException:
+                            print("Veo button not found after reload, continuing...")
+                        
+                        # Re-upload images if they were previously uploaded
+                        if current_scene_images:
+                            print(f"Re-uploading {len(current_scene_images)} images after page reload...")
+                            upload_success = upload_images_to_veo(driver, wait, current_scene_images)
+                            if upload_success:
+                                print("Images re-uploaded successfully after reload.")
+                            else:
+                                print("Warning: Failed to re-upload images after reload, continuing with text-only...")
+                        
+                        # Re-enter the prompt
+                        try:
+                            prompt_input = wait.until(EC.visibility_of_element_located((By.TAG_NAME, "textarea")))
+                            prompt_input.clear()
+                            prompt_input.send_keys(current_prompt)
+                            print("Prompt re-entered after page reload.")
+                            time.sleep(1)
+                        except Exception as prompt_error:
+                            print(f"Warning: Failed to re-enter prompt after reload: {prompt_error}")
+                        
+                        print("Page reload and setup completed. Continuing with retry...")
+                        
+                    except Exception as reload_error:
+                        print(f"Error during page reload: {reload_error}")
+                        print("Continuing with normal retry process...")
+                
                 if attempt == max_retries - 1:
                     print("Maximum retries reached. Could not generate video for this scene.")
                     return False
@@ -600,72 +746,35 @@ def process_scene(driver, wait, scene_data, scene_images):
 
 # --- Main Script ---
 def main():
+    global current_account, global_driver, global_wait
+    
+    # Validate configuration before proceeding
+    if not validate_configuration():
+        print("❌ Configuration validation failed. Please fix the issues before running the workflow.")
+        return
+    
     # Load scene data
     scenes = load_latest_scene_data()
     if not scenes:
         print("No scene data found. Please run the scene extractor first.")
         return
-    
-    options = webdriver.ChromeOptions()
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    prefs = {
-        "download.default_directory": DOWNLOAD_DIR,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "safebrowsing.enabled": True
-    }
-    options.add_experimental_option("prefs", prefs)
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument(f"user-data-dir={USER_DATA_DIR}")
-    driver = webdriver.Chrome(options=options)
-    wait = WebDriverWait(driver, 20)
+
+    # Initialize persistent browser instances for both accounts
+    print("\n🚀 Initializing persistent browser instances...")
+    if not initialize_both_browsers():
+        print("❌ Failed to initialize browsers. Exiting.")
+        return
 
     try:
-        # 1. Navigate to Google AI Studio and handle login
-        print("Navigating to AI Studio...")
-        driver.get("https://aistudio.google.com/gen-media")
-        time.sleep(3) # Wait for potential redirect
-
-        if "accounts.google.com" in driver.current_url:
-            print("Login required. Performing login...")
-            
-            # Enter email - sometimes it's pre-filled
-            try:
-                email_field = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "input[type='email']")))
-                email_field.clear()
-                email_field.send_keys(GOOGLE_EMAIL)
-                driver.find_element(By.ID, "identifierNext").click()
-                print("Email entered.")
-                time.sleep(2)
-            except TimeoutException:
-                print("Email field not found, assuming it's pre-filled or different flow.")
-
-            # Enter password
-            try:
-                password_field = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "input[type='password']")))
-                password_field.clear()
-                password_field.send_keys(GOOGLE_PASSWORD)
-                driver.find_element(By.ID, "passwordNext").click()
-                print("Password entered. Login successful.")
-                
-                # Wait for redirect back to AI studio
-                print("Waiting for redirection to AI Studio...")
-                wait.until(EC.url_contains("aistudio.google.com"))
-                print("Redirected successfully.")
-                time.sleep(5)
-            except TimeoutException:
-                print("Password field not found or login already completed.")
-        else:
-            print("Already logged in.")
-
-        # Ensure we are on the correct page
-        if "gen-media" not in driver.current_url:
-            driver.get("https://aistudio.google.com/gen-media")
-        
-        # Process each scene sequentially
+        # Process each scene sequentially using persistent browsers
         successful_scenes = 0
         total_scenes = len(scenes)
+        
+        print(f"\n🎬 Starting video generation for {total_scenes} scenes")
+        print(f"🔄 Account switching enabled: alternates every {SWITCH_ACCOUNT_AFTER_RETRIES + 1} attempts")
+        print(f"   - Attempts 1-{SWITCH_ACCOUNT_AFTER_RETRIES + 1}: primary account")
+        print(f"   - Attempts {SWITCH_ACCOUNT_AFTER_RETRIES + 2}-{(SWITCH_ACCOUNT_AFTER_RETRIES + 1) * 2}: backup account")
+        print(f"   - Attempts {(SWITCH_ACCOUNT_AFTER_RETRIES + 1) * 2 + 1}-{(SWITCH_ACCOUNT_AFTER_RETRIES + 1) * 3}: primary account (and so on...)")
         
         for i, scene_data in enumerate(scenes, 1):
             scene_num = scene_data.get('scene_number', i)
@@ -674,24 +783,24 @@ def main():
             # Find images for this scene
             scene_images = find_scene_images(scene_num)
             
-            # Process the scene
-            success = process_scene(driver, wait, scene_data, scene_images)
+            # Process the scene (driver switching handled internally)
+            success = process_scene(global_driver, global_wait, scene_data, scene_images)
             
             if success:
                 successful_scenes += 1
-                print(f"Scene {scene_num} processed successfully.")
+                print(f"Scene {scene_num} processed successfully using {current_account} account.")
                 
                 # Wait between scenes to avoid rate limiting
                 if i < total_scenes:
                     print("Waiting 30 seconds before next scene...")
-                    time.sleep(150)
+                    time.sleep(30)
             else:
                 print(f"Failed to process scene {scene_num} after retries. Continuing with next scene...")
                 
                 # Take a screenshot for debugging this specific scene failure
                 try:
-                    screenshot_path = os.path.join(DOWNLOAD_DIR, f"debug_scene_{scene_num}_failure_{int(time.time())}.png")
-                    driver.save_screenshot(screenshot_path)
+                    screenshot_path = os.path.join(DOWNLOAD_DIR, f"debug_scene_{scene_num}_failure_{current_account}_{int(time.time())}.png")
+                    global_driver.save_screenshot(screenshot_path)
                     print(f"Scene failure screenshot saved to: {screenshot_path}")
                 except:
                     print("Could not save scene failure screenshot.")
@@ -700,6 +809,7 @@ def main():
         
         print(f"\n=== Processing Complete ===")
         print(f"Successfully processed {successful_scenes}/{total_scenes} scenes.")
+        print(f"Final account used: {current_account}")
         
         print("Script finished. Waiting for a bit before closing.")
         time.sleep(10) # Wait to see the result
@@ -708,18 +818,83 @@ def main():
         print(f"An error occurred during execution: {e}")
         # Take screenshot for debugging
         try:
-            screenshot_path = os.path.join(DOWNLOAD_DIR, f"debug_error_{int(time.time())}.png")
-            driver.save_screenshot(screenshot_path)
+            screenshot_path = os.path.join(DOWNLOAD_DIR, f"debug_error_{current_account}_{int(time.time())}.png")
+            global_driver.save_screenshot(screenshot_path)
             print(f"Debug screenshot saved to: {screenshot_path}")
         except:
             print("Could not save debug screenshot.")
         
     finally:
-        print("Closing the browser.")
-        driver.quit()
+        print("🧹 Cleaning up persistent browser instances...")
+        cleanup_browsers()
 
-if __name__ == "__main__":
-    main()
+def validate_configuration():
+    """Validate the configuration before starting the workflow"""
+    print("🔍 Validating configuration...")
+    
+    issues = []
+    warnings = []
+    
+    # Check primary account credentials
+    if not GOOGLE_EMAIL or GOOGLE_EMAIL == "your_email@gmail.com":
+        issues.append("❌ Primary GOOGLE_EMAIL not configured")
+    else:
+        print(f"✅ Primary account: {GOOGLE_EMAIL}")
+        
+    if not GOOGLE_PASSWORD or GOOGLE_PASSWORD == "your_password":
+        issues.append("❌ Primary GOOGLE_PASSWORD not configured")
+    else:
+        print("✅ Primary password: ●●●●●●●●")
+    
+    # Check backup account credentials
+    if BACKUP_EMAIL == "your_backup_email@gmail.com":
+        warnings.append("⚠️ Backup email not configured - account switching disabled")
+    else:
+        print(f"✅ Backup account: {BACKUP_EMAIL}")
+        
+    if BACKUP_PASSWORD == "your_backup_password":
+        warnings.append("⚠️ Backup password not configured - account switching disabled")
+    else:
+        print("✅ Backup password: ●●●●●●●●")
+    
+    # Check directories
+    if os.path.exists(USER_DATA_DIR):
+        print(f"✅ Primary profile directory: {USER_DATA_DIR}")
+    else:
+        print(f"📁 Primary profile directory will be created: {USER_DATA_DIR}")
+        
+    if os.path.exists(BACKUP_USER_DATA_DIR):
+        print(f"✅ Backup profile directory: {BACKUP_USER_DATA_DIR}")
+    else:
+        print(f"📁 Backup profile directory will be created: {BACKUP_USER_DATA_DIR}")
+    
+    # Check download directory
+    if not os.path.exists(DOWNLOAD_DIR):
+        try:
+            os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+            print(f"📁 Created download directory: {DOWNLOAD_DIR}")
+        except Exception as e:
+            issues.append(f"❌ Cannot create download directory: {e}")
+    else:
+        print(f"✅ Download directory: {DOWNLOAD_DIR}")
+    
+    # Print results
+    print("\n" + "="*50)
+    if issues:
+        print("🚫 CONFIGURATION ISSUES:")
+        for issue in issues:
+            print(f"   {issue}")
+        print("\nPlease fix these issues before running the workflow.")
+        return False
+        
+    if warnings:
+        print("⚠️ CONFIGURATION WARNINGS:")
+        for warning in warnings:
+            print(f"   {warning}")
+        print("\nWorkflow will run with limited functionality.")
+    
+    print("✅ Configuration validation complete!")
+    return True
 
 def wait_for_file_input_ready(driver, file_input, timeout=10):
     """Wait for file input to be ready and interactable"""
@@ -816,4 +991,212 @@ def send_files_to_input(driver, file_input, file_paths, max_retries=3):
     
     return False
 
+def initialize_both_browsers():
+    """Initialize both primary and backup browser instances"""
+    global primary_driver, primary_wait, backup_driver, backup_wait, global_driver, global_wait, current_account
+    
+    print("� Initializing both browser instances...")
+    
+    # Initialize Primary Browser
+    print("📱 Setting up Primary browser...")
+    primary_options = webdriver.ChromeOptions()
+    primary_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    primary_options.add_experimental_option('useAutomationExtension', False)
+    primary_prefs = {
+        "download.default_directory": DOWNLOAD_DIR,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": True
+    }
+    primary_options.add_experimental_option("prefs", primary_prefs)
+    primary_options.add_argument("--disable-blink-features=AutomationControlled")
+    primary_options.add_argument(f"user-data-dir={USER_DATA_DIR}")
+    
+    try:
+        primary_driver = webdriver.Chrome(options=primary_options)
+        primary_wait = WebDriverWait(primary_driver, 20)
+        
+        # Login to primary account
+        print(f"🔐 Logging into primary account: {GOOGLE_EMAIL}")
+        if not login_browser(primary_driver, primary_wait, GOOGLE_EMAIL, GOOGLE_PASSWORD, "primary"):
+            print("❌ Failed to login to primary account")
+            return False
+        
+        print("✅ Primary browser ready!")
+        
+    except Exception as e:
+        print(f"❌ Error setting up primary browser: {e}")
+        return False
+    
+    # Initialize Backup Browser (only if credentials are configured)
+    if BACKUP_EMAIL != "your_backup_email@gmail.com" and BACKUP_PASSWORD != "your_backup_password":
+        print("📱 Setting up Backup browser...")
+        backup_options = webdriver.ChromeOptions()
+        backup_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        backup_options.add_experimental_option('useAutomationExtension', False)
+        backup_options.add_experimental_option("prefs", primary_prefs)  # Same download settings
+        backup_options.add_argument("--disable-blink-features=AutomationControlled")
+        backup_options.add_argument(f"user-data-dir={BACKUP_USER_DATA_DIR}")
+        
+        try:
+            backup_driver = webdriver.Chrome(options=backup_options)
+            backup_wait = WebDriverWait(backup_driver, 20)
+            
+            # Login to backup account
+            print(f"🔐 Logging into backup account: {BACKUP_EMAIL}")
+            if not login_browser(backup_driver, backup_wait, BACKUP_EMAIL, BACKUP_PASSWORD, "backup"):
+                print("❌ Failed to login to backup account")
+                # Don't return False here, continue with just primary
+                try:
+                    backup_driver.quit()
+                except:
+                    pass
+                backup_driver = None
+                backup_wait = None
+            else:
+                print("✅ Backup browser ready!")
+                
+        except Exception as e:
+            print(f"❌ Error setting up backup browser: {e}")
+            backup_driver = None
+            backup_wait = None
+    else:
+        print("⚠️ Backup credentials not configured, skipping backup browser setup")
+    
+    # Set initial active browser to primary
+    global_driver = primary_driver
+    global_wait = primary_wait
+    current_account = "primary"
+    
+    print(f"🎯 Active browser: {current_account}")
+    return True
+
+def login_browser(driver, wait, email, password, account_name):
+    """Login to a specific browser instance"""
+    try:
+        # Navigate to AI Studio
+        driver.get("https://aistudio.google.com/gen-media")
+        time.sleep(3)
+        
+        if "accounts.google.com" in driver.current_url:
+            print(f"🔐 Login required for {account_name} account...")
+            
+            # Enter email
+            try:
+                email_field = WebDriverWait(driver, 10).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, "input[type='email']"))
+                )
+                email_field.clear()
+                email_field.send_keys(email)
+                driver.find_element(By.ID, "identifierNext").click()
+                print(f"📧 {account_name.capitalize()} email entered.")
+                time.sleep(2)
+            except TimeoutException:
+                print(f"📧 {account_name.capitalize()} email field not found, assuming pre-filled.")
+
+            # Enter password
+            try:
+                password_field = WebDriverWait(driver, 10).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, "input[type='password']"))
+                )
+                password_field.clear()
+                password_field.send_keys(password)
+                driver.find_element(By.ID, "passwordNext").click()
+                print(f"🔑 {account_name.capitalize()} password entered.")
+                
+                # Wait for redirect
+                wait.until(EC.url_contains("aistudio.google.com"))
+                print(f"✅ {account_name.capitalize()} login successful!")
+                time.sleep(3)
+                
+            except TimeoutException:
+                print(f"🔑 {account_name.capitalize()} password field not found or already logged in.")
+        else:
+            print(f"✅ {account_name.capitalize()} account already logged in.")
+
+        # Ensure we're on the correct page
+        if "gen-media" not in driver.current_url:
+            driver.get("https://aistudio.google.com/gen-media")
+            time.sleep(2)
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error logging into {account_name} account: {e}")
+        return False
+
+def switch_active_browser():
+    """Switch between the two persistent browser instances"""
+    global current_account, global_driver, global_wait
+    
+    if current_account == "primary" and backup_driver:
+        # Switch to backup
+        print(f"\n🔄 SWITCHING: {current_account} → backup")
+        current_account = "backup"
+        global_driver = backup_driver
+        global_wait = backup_wait
+        
+        # Ensure backup browser is on the right page
+        if "gen-media" not in global_driver.current_url:
+            global_driver.get("https://aistudio.google.com/gen-media")
+            time.sleep(2)
+            
+    elif current_account == "backup" and primary_driver:
+        # Switch to primary
+        print(f"\n🔄 SWITCHING: {current_account} → primary")
+        current_account = "primary"
+        global_driver = primary_driver
+        global_wait = primary_wait
+        
+        # Ensure primary browser is on the right page
+        if "gen-media" not in global_driver.current_url:
+            global_driver.get("https://aistudio.google.com/gen-media")
+            time.sleep(2)
+    else:
+        print(f"⚠️ Cannot switch - backup browser not available")
+        return False
+    
+    print(f"✅ Switched to {current_account} account!")
+    print(f"🎯 Active browser: {current_account}")
+    return True
+
+def cleanup_browsers():
+    """Clean up both browser instances"""
+    global primary_driver, backup_driver
+    
+    print("🧹 Cleaning up browser instances...")
+    
+    if primary_driver:
+        try:
+            primary_driver.quit()
+            print("✅ Primary browser closed")
+        except Exception as e:
+            print(f"⚠️ Error closing primary browser: {e}")
+    
+    if backup_driver:
+        try:
+            backup_driver.quit()
+            print("✅ Backup browser closed")
+        except Exception as e:
+            print(f"⚠️ Error closing backup browser: {e}")
+
+def switch_to_backup_account():
+    """Switch to the other account using persistent browsers"""
+    global current_account, global_driver, global_wait
+    
+    print(f"\n🔄 SWITCHING ACCOUNTS after {SWITCH_ACCOUNT_AFTER_RETRIES} retries...")
+    
+    # Use the fast browser switching instead of creating new instances
+    if switch_active_browser():
+        print(f"✅ Successfully switched to {current_account} account!")
+        return global_driver, global_wait
+    else:
+        print("❌ Failed to switch browsers - backup browser not available")
+        # Return current browser to continue with same account
+        return global_driver, global_wait
+
+
+# Execute main function when script is run directly
+if __name__ == "__main__":
+    main()
 

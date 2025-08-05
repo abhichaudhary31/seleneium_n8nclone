@@ -7,19 +7,22 @@ This script provides a complete workflow to:
 1. Extract scene data from your story using Gemini
 2. Generate images for each scene using AI Studio
 3. Generate videos from scenes using Selenium automation
+4. Concatenate individual scene videos into one complete story video
 
 Usage:
 1. Run this script
 2. Choose option 1 to extract scenes from a new story
 3. Choose option 2 to generate images from extracted scenes
 4. Choose option 3 to generate videos from scenes using Selenium
-5. Or choose option 4 to do the complete workflow (extract + images + videos)
+5. Choose option 4 to do the complete workflow (extract + images + videos + concatenation)
+6. Or choose option 5 to only concatenate existing videos into one final video
 """
 
 import os
 import subprocess
 import sys
 import time
+import glob
 
 def run_script(script_name, description):
     """Run a Python script and handle errors"""
@@ -76,6 +79,109 @@ def run_script(script_name, description):
         print(f"✗ Unexpected error: {e}")
         return False
 
+def check_ffmpeg():
+    """Check if FFmpeg is installed and available"""
+    try:
+        subprocess.run(['ffmpeg', '-version'], 
+                      stdout=subprocess.DEVNULL, 
+                      stderr=subprocess.DEVNULL, 
+                      check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+def concatenate_videos(videos_dir, output_file):
+    """Concatenate videos using the video_concatenator.py script"""
+    print(f"\n{'='*50}")
+    print(f"Starting: Video Concatenation")
+    print(f"{'='*50}")
+    
+    if not os.path.exists("video_concatenator.py"):
+        print("❌ Error: video_concatenator.py script not found!")
+        return False
+    
+    if not check_ffmpeg():
+        print("❌ Error: FFmpeg is not installed or not available in PATH.")
+        print("Please install FFmpeg: https://ffmpeg.org/download.html")
+        print("On macOS with Homebrew: brew install ffmpeg")
+        return False
+    
+    # Try multiple Python paths for Mac compatibility
+    python_paths = [
+        "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",  # Mac system Python
+        "/Users/abhchaudhary/personnel_github/seleneium_n8nclone/.venv/bin/python",  # Virtual env
+        "/usr/bin/python3",  # System Python 3
+        "/usr/local/bin/python3",  # Homebrew Python 3
+        "python3",  # Python 3 in PATH
+    ]
+    
+    python_path = None
+    for path in python_paths:
+        if path == "python3":
+            # For commands in PATH, check if they exist
+            try:
+                result = subprocess.run([path, "--version"], 
+                                      capture_output=True, 
+                                      text=True, 
+                                      timeout=5)
+                if result.returncode == 0:
+                    python_path = path
+                    break
+            except:
+                continue
+        else:
+            # For absolute paths, check if file exists
+            if os.path.exists(path):
+                python_path = path
+                break
+    
+    if not python_path:
+        print("❌ Error: No Python executable found!")
+        return False
+    
+    try:
+        # Check if directory exists
+        if not os.path.isdir(videos_dir):
+            print(f"❌ Error: Directory '{videos_dir}' does not exist!")
+            return False
+            
+        # Check if there are video files in the directory
+        video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v']
+        has_videos = False
+        
+        for ext in video_extensions:
+            if glob.glob(os.path.join(videos_dir, f"*{ext}")) or glob.glob(os.path.join(videos_dir, f"*{ext.upper()}")):
+                has_videos = True
+                break
+                
+        if not has_videos:
+            print(f"❌ Error: No video files found in '{videos_dir}'")
+            print("Make sure you have generated videos first using the workflow.")
+            return False
+        
+        # Run the video concatenation script
+        print(f"Concatenating videos from: {videos_dir}")
+        print(f"Output will be saved to: {output_file}")
+        
+        cmd = [python_path, "video_concatenator.py", videos_dir, "-o", output_file]
+        result = subprocess.run(cmd, check=True)
+        
+        if os.path.exists(output_file):
+            file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
+            print(f"✅ Video concatenation completed successfully!")
+            print(f"Final video created: {output_file} ({file_size_mb:.1f} MB)")
+            return True
+        else:
+            print(f"❌ Video concatenation failed: Output file not created")
+            return False
+        
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Video concatenation failed with error code: {e.returncode}")
+        return False
+    except Exception as e:
+        print(f"❌ Unexpected error during video concatenation: {e}")
+        return False
+
 def check_selenium_setup():
     """Check if Selenium automation is properly configured"""
     print("\n🔍 Checking Selenium setup...")
@@ -104,6 +210,13 @@ def check_selenium_setup():
     
     print("✓ Selenium script found: test_selenium.py")
     
+    # Check for ffmpeg (needed for video concatenation)
+    if check_ffmpeg():
+        print("✓ FFmpeg found (required for video concatenation)")
+    else:
+        print("⚠️  FFmpeg not found. Video concatenation will not be available.")
+        print("   Install FFmpeg to enable video concatenation.")
+    
     # Check for scene data and images
     scene_data_dir = os.path.join(os.path.expanduser("~"), "Downloads", "scene_data")
     scene_images_dir = os.path.join(os.path.expanduser("~"), "Downloads", "scene_images")
@@ -130,8 +243,9 @@ def main():
     print("This workflow will help you:")
     print("1. Extract scene data from your story using Gemini AI")
     print("2. Generate images for each scene using Google AI Studio")
-    print("3. Generate videos from scenes using Selenium automation")
-    print("4. Complete end-to-end video generation workflow")
+    print("3. Generate videos from scenes using Selenium automation") 
+    print("4. Concatenate videos into one complete story")
+    print("5. Run a complete end-to-end workflow (extraction → images → videos → concatenation)")
     print()
     
     while True:
@@ -139,12 +253,13 @@ def main():
         print("1. Extract scenes from story (using Gemini)")
         print("2. Generate images from scenes (using AI Studio)")
         print("3. Generate videos from scenes (using Selenium automation)")
-        print("4. Complete workflow (extract scenes + generate images + generate videos)")
-        print("5. Check system setup")
-        print("6. Exit")
+        print("4. Complete workflow (extract scenes + images + videos + concatenation)")
+        print("5. Concatenate existing videos into final story video")
+        print("6. Check system setup")
+        print("7. Exit")
         print()
         
-        choice = input("Select an option (1-6): ").strip()
+        choice = input("Select an option (1-7): ").strip()
         
         if choice == "1":
             print("\n🎬 Starting scene extraction...")
@@ -168,7 +283,7 @@ def main():
             print("   - Make sure you have Chrome browser installed")
             print("   - Ensure you're logged into Google AI Studio")
             print("   - This process will take several minutes per scene")
-            print("   - Videos will be downloaded to ~/Documents/")
+            print("   - Videos will be downloaded to ~/Downloads/scene_videos/")
             print()
             
             # Check if user wants to continue
@@ -177,7 +292,7 @@ def main():
                 success = run_script("test_selenium.py", "Video Generation (Selenium)")
                 if success:
                     print("\n✅ Video generation completed!")
-                    print("Videos should be downloaded to ~/Documents/")
+                    print("Videos should be downloaded to ~/Downloads/scene_videos/")
                 else:
                     print("\n❌ Video generation failed!")
                     print("Common issues:")
@@ -240,14 +355,43 @@ def main():
                     success3 = run_script("test_selenium.py", "Video Generation (Selenium)")
                     
                     if success3:
-                        print("\n🎉 COMPLETE WORKFLOW FINISHED SUCCESSFULLY!")
+                        print("\n✅ Videos generated successfully!")
+                        
+                        # Step 4: Concatenate all videos into a final video
+                        print("\n" + "="*60)
+                        print("STEP 4: Concatenating videos into final story...")
                         print("="*60)
-                        print("Your story has been converted to videos!")
-                        print("Check the following locations:")
-                        print(f"   - Scene data: ~/Downloads/scene_data/")
-                        print(f"   - Generated images: ~/Downloads/scene_images/")
-                        print(f"   - Generated videos: ~/Documents/")
-                        print("="*60)
+                        
+                        # Wait a moment for any video downloads to complete
+                        print("Waiting for video downloads to complete (5 seconds)...")
+                        time.sleep(5)
+                        
+                        # Automatically proceed with video concatenation (no prompt)
+                        print("Automatically proceeding with video concatenation...")
+                        
+                        # Set up paths for video concatenation
+                        videos_dir = os.path.join(os.path.expanduser("~"), "Downloads", "scene_videos")
+                        timestamp = int(time.time())
+                        output_file = os.path.join(os.path.expanduser("~"), "Downloads", f"complete_story_{timestamp}.mp4")
+                        
+                        # Run the concatenation
+                        success4 = concatenate_videos(videos_dir, output_file)
+                        
+                        if success4:
+                            print("\n🎉 COMPLETE WORKFLOW FINISHED SUCCESSFULLY!")
+                            print("="*60)
+                            print("Your story has been converted to videos!")
+                            print("Check the following locations:")
+                            print(f"   - Scene data: ~/Downloads/scene_data/")
+                            print(f"   - Generated images: ~/Downloads/scene_images/")
+                            print(f"   - Individual scene videos: ~/Downloads/scene_videos/")
+                            print(f"   - Complete story video: {output_file}")
+                            print("="*60)
+                        else:
+                            print("\n⚠️  Scene extraction, image and video generation succeeded,")
+                            print("    but video concatenation failed.")
+                            print("    Your individual scene videos are still available in ~/Downloads/scene_videos/")
+                            print("    You can try running the video concatenation separately (option 5) later.")
                     else:
                         print("\n⚠️  Scene extraction and image generation succeeded,")
                         print("    but video generation failed.")
@@ -260,6 +404,58 @@ def main():
                 print("Please check the error messages above and try again.")
             
         elif choice == "5":
+            print("\n🎞️  Starting video concatenation...")
+            print("This will combine all videos in your scene_videos folder into one final video.")
+            print("⚠️  Important Notes:")
+            print("   - Make sure you have FFmpeg installed")
+            print("   - Individual scene videos should be in ~/Downloads/scene_videos/")
+            print("   - Videos will be concatenated in time-based order")
+            print()
+            
+            # Check if user wants to specify a custom videos directory
+            use_custom_dir = input("Use a custom videos directory? (default is ~/Downloads/scene_videos) (y/n): ").strip().lower()
+            if use_custom_dir == 'y':
+                custom_dir = input("Enter the full path to the videos directory: ").strip()
+                videos_dir = os.path.expanduser(custom_dir) if custom_dir.startswith("~") else custom_dir
+                if not os.path.isdir(videos_dir):
+                    print(f"❌ Error: Directory '{videos_dir}' does not exist!")
+                    print("Using default directory ~/Downloads/scene_videos instead.")
+                    videos_dir = os.path.join(os.path.expanduser("~"), "Downloads", "scene_videos")
+            else:
+                videos_dir = os.path.join(os.path.expanduser("~"), "Downloads", "scene_videos")
+            
+            # Let user customize output file name
+            default_name = f"complete_story_{int(time.time())}.mp4"
+            custom_name = input(f"Enter output file name (default: {default_name}): ").strip()
+            output_name = custom_name if custom_name else default_name
+            
+            # Ensure output file has .mp4 extension
+            if not output_name.lower().endswith('.mp4'):
+                output_name += '.mp4'
+                
+            output_file = os.path.join(os.path.expanduser("~"), "Downloads", output_name)
+            
+            # Check if user wants to continue
+            print(f"\nVideo concatenation will:")
+            print(f"   - Look for videos in: {videos_dir}")
+            print(f"   - Create output file: {output_file}")
+            continue_concat = input("\nContinue with video concatenation? (y/n): ").strip().lower()
+            
+            if continue_concat == 'y':
+                success = concatenate_videos(videos_dir, output_file)
+                if success:
+                    print("\n✅ Video concatenation completed!")
+                    print(f"Final video saved to: {output_file}")
+                else:
+                    print("\n❌ Video concatenation failed!")
+                    print("Common issues:")
+                    print("   - FFmpeg not installed")
+                    print("   - No compatible video files found")
+                    print("   - Video files have incompatible formats")
+            else:
+                print("Video concatenation cancelled.")
+                
+        elif choice == "6":
             print("\n🔧 Checking system setup...")
             setup_ok = check_selenium_setup()
             if setup_ok:
@@ -267,13 +463,13 @@ def main():
             else:
                 print("\n❌ System setup needs attention. Please resolve the issues above.")
             
-        elif choice == "6":
+        elif choice == "7":
             print("\nGoodbye! 👋")
             print("Happy video creating! 🎬")
             break
             
         else:
-            print("Invalid choice. Please select 1, 2, 3, 4, 5, or 6.")
+            print("Invalid choice. Please select 1, 2, 3, 4, 5, 6, or 7.")
         
         print("\n" + "-"*60)
 
@@ -285,23 +481,56 @@ if __name__ == "__main__":
         "image_generation.py",
         "test_selenium.py"
     ]
-    missing_scripts = []
+    
+    optional_scripts = [
+        "video_concatenator.py"
+    ]
+    
+    missing_required = []
+    missing_optional = []
+    video_concatenation_available = True
     
     for script in required_scripts:
         if not os.path.exists(script):
-            missing_scripts.append(script)
+            missing_required.append(script)
     
-    if missing_scripts:
+    for script in optional_scripts:
+        if not os.path.exists(script):
+            missing_optional.append(script)
+            if script == "video_concatenator.py":
+                video_concatenation_available = False
+    
+    if missing_required:
         print("❌ Missing required scripts:")
-        for script in missing_scripts:
+        for script in missing_required:
             print(f"   - {script}")
-        print("\nPlease ensure all scripts are in the current directory.")
+        print("\nPlease ensure all required scripts are in the current directory.")
         print("\nRequired scripts:")
         print("   - gemini_scene_extractor.py (for scene extraction)")
         print("   - scene_image_generator.py (for image generation)")
         print("   - image_generation.py (helper for image generation)")
         print("   - test_selenium.py (for video generation)")
         sys.exit(1)
+    
+    if missing_optional:
+        print("⚠️  Missing optional scripts:")
+        for script in missing_optional:
+            print(f"   - {script}")
+        print("\nOptional scripts:")
+        print("   - video_concatenator.py (for video concatenation)")
+        print("     Without this script, video concatenation functionality will be unavailable.")
+        print("     You can still extract scenes, generate images, and create individual videos.")
+        print("")
+    
+    # Check for FFmpeg (needed for video concatenation)
+    ffmpeg_available = check_ffmpeg()
+    if not ffmpeg_available:
+        video_concatenation_available = False
+        print("⚠️  FFmpeg not found. Video concatenation will not be available.")
+        print("   To enable video concatenation, please install FFmpeg:")
+        print("   macOS: brew install ffmpeg")
+        print("   Ubuntu: sudo apt install ffmpeg")
+        print("")
     
     print("✅ All required scripts found!")
     main()
