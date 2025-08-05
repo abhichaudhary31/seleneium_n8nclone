@@ -25,7 +25,7 @@ def run_script(script_name, description):
     print(f"{'='*50}")
     
     try:
-        python_path = "/Users/abhchaudhary/personnel_github/seleneium_n8nclone/.venv/bin/python"
+        python_path = "python"
         result = subprocess.run([python_path, script_name], check=True)
         print(f"✓ {description} completed successfully!")
         return True

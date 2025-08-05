@@ -2,6 +2,7 @@ import time
 import os
 import json
 import glob
+import random
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -22,7 +23,7 @@ BACKUP_PASSWORD = "Stuti@0103"      # Replace with your backup password
 BACKUP_USER_DATA_DIR = os.path.join(os.path.expanduser("~"), "selenium_chrome_profile_backup")
 
 # Global account switching configuration
-SWITCH_ACCOUNT_AFTER_RETRIES = 1  # Switch accounts every N+1 attempts (e.g., 3 means switch every 4 attempts: 1-4 primary, 5-8 backup, 9-12 primary, etc.)
+SWITCH_ACCOUNT_AFTER_RETRIES = 3  # Switch accounts every N+1 attempts (e.g., 3 means switch every 4 attempts: 1-4 primary, 5-8 backup, 9-12 primary, etc.)
 current_account = "primary"  # Track which account is currently active
 
 # Persistent browser instances
@@ -475,7 +476,7 @@ def process_scene(driver, wait, scene_data, scene_images):
         
         # Click the Run button with retry logic
         print("Clicking Run button with retry logic...")
-        print("🔄 Auto-reload: Page will reload every 2 failed attempts to reset state")
+        # print("🔄 Auto-reload: Page will reload every 1 failed attempts to reset state")
         print(f"🔄 Account Switch: Alternates every {SWITCH_ACCOUNT_AFTER_RETRIES + 1} attempts between primary ↔ backup")
         
         # First, check for and dismiss any overlays that might be blocking the Run button
@@ -510,7 +511,7 @@ def process_scene(driver, wait, scene_data, scene_images):
         except Exception as overlay_error:
             print(f"Error while dismissing overlays: {overlay_error}")
         
-        max_retries = 25  # Max retries per scene before giving up
+        max_retries = 50  # Max retries per scene before giving up
         
         for attempt in range(max_retries):
             print(f"Attempt {attempt + 1}/{max_retries}: Clicking the 'Run' button... [Account: {current_account}]")
@@ -570,14 +571,14 @@ def process_scene(driver, wait, scene_data, scene_images):
                     print(f"Error setting up {current_account} browser: {setup_error}")
                     return False  # Fail this scene if account switch fails
             
-            # Show reload schedule information
-            if (attempt + 1) % 2 == 0:
-                print(f"📅 Note: Page reload will occur after this attempt if it fails. [Account: {current_account}]")
-            elif attempt > 0:
-                next_reload = 2 - ((attempt + 1) % 2)
-                if next_reload == 2:
-                    next_reload = 2
-                print(f"📅 Next page reload in {next_reload} attempts if needed. [Account: {current_account}]")
+            # # Show reload schedule information
+            # if (attempt + 1) % 1 == 0:
+            #     print(f"📅 Note: Page reload will occur after this attempt if it fails. [Account: {current_account}]")
+            # elif attempt > 0:
+            #     next_reload = 1 - ((attempt + 1) % 1)
+            #     if next_reload == 1:
+            #         next_reload = 1
+            #     print(f"📅 Next page reload in {next_reload} attempts if needed. [Account: {current_account}]")
             
             try:
                 # Try multiple approaches to click the Run button
@@ -622,8 +623,8 @@ def process_scene(driver, wait, scene_data, scene_images):
 
             try:
                 # Check for an error message within 5 seconds
-                error_message_xpath = "//*[contains(., 'Failed to generate video, quota exceeded') or contains(., 'Failed to generate video: permission denied')]"
-                WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.XPATH, error_message_xpath)))
+                error_message_xpath = "//*[contains(., 'Failed to generate video, quota exceeded') or contains(., 'Failed to generate video: permission denied. Please try again.') or contains(., 'Failed to') ]"
+                WebDriverWait(driver, 100).until(EC.visibility_of_element_located((By.XPATH, error_message_xpath)))
                 
                 # Error detected - handle dismissal and retry
                 print("Error detected. Beginning dismissal and retry process.")
@@ -647,62 +648,63 @@ def process_scene(driver, wait, scene_data, scene_images):
                 except TimeoutException:
                     print("Warning: The error popup may not have closed correctly.")
 
-                print(f"Waiting for 26 seconds before retry attempt {attempt + 2}...")
-                time.sleep(26)
+                wait_time = random.randint(16, 22)  # Random wait between 10 and 20 seconds
+                print(f"Waiting for 16 seconds before retry attempt {attempt + 2}...")
+                time.sleep(wait_time)
                 
-                # Page reload functionality after every 2 retry attempts
-                if (attempt + 1) % 2 == 0 and attempt < max_retries - 1:
-                    print(f"\n🔄 Performing page reload after {attempt + 1} attempts to reset page state...")
-                    try:
-                        # Save current scene data for re-entry after reload
-                        current_prompt = prompt_text
-                        current_scene_images = scene_images
+                # # Page reload functionality after every 2 retry attempts
+                # if (attempt + 1) % 1 == 0 and attempt < max_retries - 1:
+                #     print(f"\n🔄 Performing page reload after {attempt + 1} attempts to reset page state...")
+                #     try:
+                #         # Save current scene data for re-entry after reload
+                #         current_prompt = prompt_text
+                #         current_scene_images = scene_images
                         
-                        # Reload the page
-                        driver.refresh()
-                        print("Page reloaded successfully.")
-                        time.sleep(5)  # Wait for page to load
+                #         # Reload the page
+                #         driver.refresh()
+                #         print("Page reloaded successfully.")
+                #         time.sleep(5)  # Wait for page to load
                         
-                        # Navigate back to Veo if needed
-                        if "gen-media" not in driver.current_url:
-                            driver.get("https://aistudio.google.com/gen-media")
-                            time.sleep(3)
+                #         # Navigate back to Veo if needed
+                #         if "gen-media" not in driver.current_url:
+                #             driver.get("https://aistudio.google.com/gen-media")
+                #             time.sleep(3)
                         
-                        # Re-select Veo button if needed
-                        try:
-                            veo_button = WebDriverWait(driver, 5).until(
-                                EC.element_to_be_clickable((By.XPATH, "//mat-card[@aria-label='Veo']"))
-                            )
-                            veo_button.click()
-                            print("Veo button re-selected after reload.")
-                            time.sleep(2)
-                        except TimeoutException:
-                            print("Veo button not found after reload, continuing...")
+                #         # Re-select Veo button if needed
+                #         try:
+                #             veo_button = WebDriverWait(driver, 5).until(
+                #                 EC.element_to_be_clickable((By.XPATH, "//mat-card[@aria-label='Veo']"))
+                #             )
+                #             veo_button.click()
+                #             print("Veo button re-selected after reload.")
+                #             time.sleep(2)
+                #         except TimeoutException:
+                #             print("Veo button not found after reload, continuing...")
                         
-                        # Re-upload images if they were previously uploaded
-                        if current_scene_images:
-                            print(f"Re-uploading {len(current_scene_images)} images after page reload...")
-                            upload_success = upload_images_to_veo(driver, wait, current_scene_images)
-                            if upload_success:
-                                print("Images re-uploaded successfully after reload.")
-                            else:
-                                print("Warning: Failed to re-upload images after reload, continuing with text-only...")
+                #         # Re-upload images if they were previously uploaded
+                #         if current_scene_images:
+                #             print(f"Re-uploading {len(current_scene_images)} images after page reload...")
+                #             upload_success = upload_images_to_veo(driver, wait, current_scene_images)
+                #             if upload_success:
+                #                 print("Images re-uploaded successfully after reload.")
+                #             else:
+                #                 print("Warning: Failed to re-upload images after reload, continuing with text-only...")
                         
-                        # Re-enter the prompt
-                        try:
-                            prompt_input = wait.until(EC.visibility_of_element_located((By.TAG_NAME, "textarea")))
-                            prompt_input.clear()
-                            prompt_input.send_keys(current_prompt)
-                            print("Prompt re-entered after page reload.")
-                            time.sleep(1)
-                        except Exception as prompt_error:
-                            print(f"Warning: Failed to re-enter prompt after reload: {prompt_error}")
+                #         # Re-enter the prompt
+                #         try:
+                #             prompt_input = wait.until(EC.visibility_of_element_located((By.TAG_NAME, "textarea")))
+                #             prompt_input.clear()
+                #             prompt_input.send_keys(current_prompt)
+                #             print("Prompt re-entered after page reload.")
+                #             time.sleep(1)
+                #         except Exception as prompt_error:
+                #             print(f"Warning: Failed to re-enter prompt after reload: {prompt_error}")
                         
-                        print("Page reload and setup completed. Continuing with retry...")
+                #         print("Page reload and setup completed. Continuing with retry...")
                         
-                    except Exception as reload_error:
-                        print(f"Error during page reload: {reload_error}")
-                        print("Continuing with normal retry process...")
+                    # except Exception as reload_error:
+                    #     print(f"Error during page reload: {reload_error}")
+                    #     print("Continuing with normal retry process...")
                 
                 if attempt == max_retries - 1:
                     print("Maximum retries reached. Could not generate video for this scene.")

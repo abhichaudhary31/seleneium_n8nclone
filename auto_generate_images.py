@@ -15,7 +15,7 @@ def main():
     print("=" * 50)
     
     # Get the Python executable path
-    python_path = "/Users/abhchaudhary/personnel_github/seleneium_n8nclone/.venv/bin/python"
+    python_path = "pyhton"
     script_path = "scene_image_generator.py"
     
     # Check if the script exists

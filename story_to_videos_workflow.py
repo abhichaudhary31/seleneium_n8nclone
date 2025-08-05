@@ -31,34 +31,35 @@ def run_script(script_name, description):
     print(f"{'='*50}")
     
     try:
-        # Try multiple Python paths for Mac compatibility
+        # Try multiple Python paths for Windows and Mac compatibility
         python_paths = [
+            "python",  # Windows Python in PATH
+            "python3",  # Python 3 in PATH
+            sys.executable,  # Current Python interpreter
             "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",  # Mac system Python
             "/Users/abhchaudhary/personnel_github/seleneium_n8nclone/.venv/bin/python",  # Virtual env
             "/usr/bin/python3",  # System Python 3
             "/usr/local/bin/python3",  # Homebrew Python 3
-            "python3",  # Python 3 in PATH
         ]
         
         python_path = None
         for path in python_paths:
-            if path == "python3":
-                # For commands in PATH, check if they exist
-                try:
-                    result = subprocess.run([path, "--version"], 
-                                          capture_output=True, 
-                                          text=True, 
-                                          timeout=5)
-                    if result.returncode == 0:
-                        python_path = path
-                        break
-                except:
-                    continue
-            else:
-                # For absolute paths, check if file exists
-                if os.path.exists(path):
+            try:
+                # Check if the Python command works
+                if path == sys.executable:
+                    # If it's the current interpreter, we know it works
                     python_path = path
                     break
+                result = subprocess.run([path, "--version"], 
+                                     capture_output=True, 
+                                     text=True, 
+                                     timeout=5,
+                                     shell=True if os.name == 'nt' else False)  # Use shell=True for Windows
+                if result.returncode == 0:
+                    python_path = path
+                    break
+            except:
+                continue
         
         if not python_path:
             print("❌ Error: No Python executable found!")
@@ -106,34 +107,29 @@ def concatenate_videos(videos_dir, output_file):
         print("On macOS with Homebrew: brew install ffmpeg")
         return False
     
-    # Try multiple Python paths for Mac compatibility
+    # Try multiple Python paths for Mac and Windows compatibility
     python_paths = [
         "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",  # Mac system Python
         "/Users/abhchaudhary/personnel_github/seleneium_n8nclone/.venv/bin/python",  # Virtual env
         "/usr/bin/python3",  # System Python 3
         "/usr/local/bin/python3",  # Homebrew Python 3
         "python3",  # Python 3 in PATH
+        "python"  # Windows Python in PATH
     ]
     
     python_path = None
     for path in python_paths:
-        if path == "python3":
-            # For commands in PATH, check if they exist
-            try:
-                result = subprocess.run([path, "--version"], 
-                                      capture_output=True, 
-                                      text=True, 
-                                      timeout=5)
-                if result.returncode == 0:
-                    python_path = path
-                    break
-            except:
-                continue
-        else:
-            # For absolute paths, check if file exists
-            if os.path.exists(path):
+        try:
+            # Check if the Python command works
+            result = subprocess.run([path, "--version"], 
+                                  capture_output=True, 
+                                  text=True, 
+                                  timeout=5)
+            if result.returncode == 0:
                 python_path = path
                 break
+        except:
+            continue
     
     if not python_path:
         print("❌ Error: No Python executable found!")

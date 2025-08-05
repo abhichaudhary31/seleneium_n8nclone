@@ -30,14 +30,16 @@ def check_ffmpeg():
 
 def get_video_files(folder_path):
     """Get all video files from the specified folder"""
-    video_files = []
+    video_files = set()  # Using a set to avoid duplicates
     
     for ext in SUPPORTED_FORMATS:
         pattern = os.path.join(folder_path, f"*{ext}")
-        video_files.extend(glob.glob(pattern))
+        video_files.update(glob.glob(pattern))
         # Also check for uppercase extensions
         pattern = os.path.join(folder_path, f"*{ext.upper()}")
-        video_files.extend(glob.glob(pattern))
+        video_files.update(glob.glob(pattern))
+    
+    return list(video_files)  # Convert back to list
     
     return video_files
 
