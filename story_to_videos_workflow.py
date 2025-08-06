@@ -249,13 +249,14 @@ def main():
         print("1. Extract scenes from story (using Gemini)")
         print("2. Generate images from scenes (using AI Studio)")
         print("3. Generate videos from scenes (using Selenium automation)")
-        print("4. Complete workflow (extract scenes + images + videos + concatenation)")
-        print("5. Concatenate existing videos into final story video")
-        print("6. Check system setup")
-        print("7. Exit")
+        print("4. Generate videos using CDP automation (more robust)")
+        print("5. Complete workflow (extract scenes + images + videos + concatenation)")
+        print("6. Concatenate existing videos into final story video")
+        print("7. Check system setup")
+        print("8. Exit")
         print()
         
-        choice = input("Select an option (1-7): ").strip()
+        choice = input("Select an option (1-8): ").strip()
         
         if choice == "1":
             print("\n🎬 Starting scene extraction...")
@@ -298,8 +299,36 @@ def main():
                     print("   - Quota limits reached")
             else:
                 print("Video generation cancelled.")
-            
+        
         elif choice == "4":
+            print("\n🎥 Starting video generation using CDP automation (more robust)...")
+            print("⚠️  Important Notes:")
+            print("   - This uses Chrome DevTools Protocol for more reliable automation")
+            print("   - Make sure you have Chrome browser installed")
+            print("   - This process will take several minutes per scene")
+            print("   - Videos will be downloaded to ~/Downloads/scene_videos/")
+            print("   - Supports auto login, account switching, and robust error handling")
+            print()
+            
+            # Check if new_test.py exists
+            if not os.path.exists("new_test.py"):
+                print("❌ new_test.py not found. This script is required for CDP automation.")
+                continue
+                
+            # Check if user wants to continue
+            continue_video = input("Continue with CDP-based video generation? (y/n): ").strip().lower()
+            if continue_video == 'y':
+                success = run_script("new_test.py", "Video Generation (CDP)")
+                if success:
+                    print("\n✅ CDP-based video generation completed!")
+                    print("Videos should be downloaded to ~/Downloads/scene_videos/")
+                else:
+                    print("\n❌ CDP-based video generation encountered issues!")
+                    print("Check the output above for specific errors.")
+            else:
+                print("CDP-based video generation cancelled.")
+            
+        elif choice == "5":
             print("\n🚀 Starting COMPLETE workflow...")
             print("This will take a significant amount of time!")
             print("Estimated time: 10-30 minutes depending on number of scenes")
@@ -309,6 +338,12 @@ def main():
             print("   - No further input will be required until completion")
             print("   - Chrome browser will open automatically during the process")
             print()
+            
+            # Ask which video generation approach to use
+            print("Which video generation approach would you like to use?")
+            print("1. Standard Selenium automation")
+            print("2. CDP-based automation (more robust)")
+            video_choice = input("Select video generation approach (1/2): ").strip()
             
             continue_complete = input("Start complete automated workflow? (y/n): ").strip().lower()
             if continue_complete != 'y':
@@ -336,19 +371,22 @@ def main():
                 if success2:
                     print("\n✅ Image generation completed!")
                     
-                    # Step 3: Generate videos
+                    # Step 3: Generate videos based on user choice
                     print("\n" + "="*60)
-                    print("STEP 3: Generating videos using Selenium...")
+                    print("STEP 3: Generating videos...")
                     print("="*60)
                     print("⚠️  Important note:")
                     print("   - Chrome will open automatically")
-                    print("   - Ensure you're already logged into Google AI Studio")
                     print("   - Process will run automatically with retry mechanisms")
                     print()
                     
-                    # Automatically proceed with video generation (no prompt)
-                    print("Automatically proceeding with video generation...")
-                    success3 = run_script("test_selenium.py", "Video Generation (Selenium)")
+                    # Choose the video generation approach based on user selection
+                    if video_choice == "2":
+                        print("Using CDP-based automation for video generation...")
+                        success3 = run_script("new_test.py", "Video Generation (CDP)")
+                    else:
+                        print("Using standard Selenium automation for video generation...")
+                        success3 = run_script("test_selenium.py", "Video Generation (Selenium)")
                     
                     if success3:
                         print("\n✅ Videos generated successfully!")
@@ -399,7 +437,7 @@ def main():
                 print("\n❌ Scene extraction failed. Cannot proceed with workflow.")
                 print("Please check the error messages above and try again.")
             
-        elif choice == "5":
+        elif choice == "6":
             print("\n🎞️  Starting video concatenation...")
             print("This will combine all videos in your scene_videos folder into one final video.")
             print("⚠️  Important Notes:")
@@ -451,7 +489,7 @@ def main():
             else:
                 print("Video concatenation cancelled.")
                 
-        elif choice == "6":
+        elif choice == "7":
             print("\n🔧 Checking system setup...")
             setup_ok = check_selenium_setup()
             if setup_ok:
@@ -459,13 +497,13 @@ def main():
             else:
                 print("\n❌ System setup needs attention. Please resolve the issues above.")
             
-        elif choice == "7":
+        elif choice == "8":
             print("\nGoodbye! 👋")
             print("Happy video creating! 🎬")
             break
             
         else:
-            print("Invalid choice. Please select 1, 2, 3, 4, 5, 6, or 7.")
+            print("Invalid choice. Please select 1, 2, 3, 4, 5, 6, 7, or 8.")
         
         print("\n" + "-"*60)
 
@@ -477,6 +515,14 @@ if __name__ == "__main__":
         "image_generation.py",
         "test_selenium.py"
     ]
+    
+    # Check for CDP automation script
+    if os.path.exists("new_test.py"):
+        print("✅ CDP automation script found: new_test.py")
+    else:
+        print("⚠️ CDP automation script not found: new_test.py")
+        print("    You won't be able to use the more robust CDP-based automation option.")
+        print("    Only standard Selenium automation will be available.")
     
     optional_scripts = [
         "video_concatenator.py"
