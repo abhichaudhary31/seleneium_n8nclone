@@ -5,6 +5,7 @@ import subprocess
 import json
 import glob
 import random
+import re
 import smtplib
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -166,21 +167,43 @@ def save_debug_screenshot(context="debug"):
         return None
 
 def load_latest_scene_data():
-    """Load the most recent scene data JSON file"""
+    """Load scene data from video_prompt_final.json"""
     try:
-        json_files = glob.glob(os.path.join(SCENE_DATA_DIR, "*_scenes_*.json"))
-        if not json_files:
-            print("No scene data JSON files found.")
+        video_prompt_file = os.path.join(SCENE_DATA_DIR, "video_prompt_final.json")
+        if not os.path.exists(video_prompt_file):
+            print(f"video_prompt_final.json not found at: {video_prompt_file}")
+            print("Please make sure the merged scene data file exists.")
             return []
         
-        # Get the most recent file
-        latest_file = max(json_files, key=os.path.getctime)
-        print(f"Loading scene data from: {latest_file}")
+        print(f"Loading scene data from: {video_prompt_file}")
         
-        with open(latest_file, 'r', encoding='utf-8') as f:
-            scenes = json.load(f)
+        with open(video_prompt_file, 'r', encoding='utf-8') as f:
+            scene_prompts = json.load(f)
         
-        print(f"Loaded {len(scenes)} scenes from JSON file.")
+        # Convert the scene prompts dict to a list of scene dicts
+        scenes = []
+        for scene_key, prompt in scene_prompts.items():
+            # Extract scene number from various possible formats (Scene1, Scene(2), etc.)
+            scene_num_match = re.search(r'(\d+)', scene_key)
+            if scene_num_match:
+                scene_number = int(scene_num_match.group(1))
+            else:
+                # Fallback: use position in dict + 1
+                scene_number = len(scenes) + 1
+            
+            scene_dict = {
+                'scene_number': scene_number,
+                'prompt': prompt
+            }
+            scenes.append(scene_dict)
+        
+        # Sort scenes by scene number to ensure correct order
+        scenes.sort(key=lambda x: x['scene_number'])
+        
+        print(f"Loaded {len(scenes)} scenes from video_prompt_final.json")
+        for scene in scenes:
+            print(f"  Scene {scene['scene_number']}: {scene['prompt'][:50]}...")
+        
         return scenes
     except Exception as e:
         print(f"Error loading scene data: {e}")
@@ -220,7 +243,12 @@ def find_scene_images(scene_number):
         return []
 
 def create_combined_prompt(scene_data):
-    """Create a comprehensive prompt from scene data"""
+    """Create a prompt from scene data - now simply returns the prompt string"""
+    # For the new format, scene_data contains 'scene_number' and 'prompt'
+    if isinstance(scene_data, dict) and 'prompt' in scene_data:
+        return scene_data['prompt']
+    
+    # Fallback for legacy format (if needed for compatibility)
     prompt_parts = []
     
     if scene_data.get('scene_title'):
@@ -241,7 +269,7 @@ def create_combined_prompt(scene_data):
     if scene_data.get('technical_parameters'):
         prompt_parts.append(f"Technical: {scene_data['technical_parameters']}")
     
-    return ". ".join(prompt_parts)
+    return ". ".join(prompt_parts) if prompt_parts else "No prompt available"
 
 def upload_images_to_veo(driver, wait, image_paths):
     """Upload images by clicking upload button then using send_keys to file input"""
@@ -885,7 +913,8 @@ def process_scene(driver, wait, scene_data, scene_images):
     global current_account, global_driver, global_wait
     
     scene_num = scene_data.get('scene_number', 'Unknown')
-    scene_title = scene_data.get('scene_title', 'Untitled')
+    # For the new format, we don't have scene_title, just the prompt
+    scene_title = f"Scene {scene_num}"
     
     print(f"\n=== Processing Scene {scene_num}: {scene_title} ===")
     print(f"🔄 Using {current_account} account")
@@ -1399,7 +1428,8 @@ def display_scene_summary(scenes, start_idx, end_idx):
     
     for i, scene_data in enumerate(selected_scenes, start_idx):
         scene_num = scene_data.get('scene_number', i)
-        scene_title = scene_data.get('scene_title', 'Untitled')
+        # For the new format, we don't have scene_title, just use scene number
+        scene_title = f"Scene {scene_num}"
         
         # Check for images
         scene_images = find_scene_images(scene_num)
