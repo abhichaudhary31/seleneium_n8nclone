@@ -25,7 +25,7 @@ def run_script(script_name, description):
     print(f"{'='*50}")
     
     try:
-        python_path = "python"
+        python_path = "python3"  # Use python3 to match your system
         result = subprocess.run([python_path, script_name], check=True)
         print(f"✓ {description} completed successfully!")
         return True

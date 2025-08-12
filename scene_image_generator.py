@@ -139,7 +139,7 @@ def run_image_generation(script_path, scene_number, scene_title):
     
     try:
         # Get the Python executable path
-        python_path = "python"
+        python_path = "python3"  # Use python3 to match your system
         
         # Run the script with real-time output (no capture_output)
         print(f"🚀 Starting image generation for Scene {scene_number}...")
