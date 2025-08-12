@@ -22,10 +22,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # --- STORY CONFIGURATION ---
 # Enter your story here between the triple quotes
-STORY_TEXT = """There was once a merchant who employed many carpenters and masons to build a temple in his garden. Regularly, they would start work in the morning; and take a break for the mid-day meals, and return to resume work till evening.One day, a group of monkey arrived at the site of the building and watched the workers leaving for their mid-day meals.One of the carpenters was sawing a huge log of wood. Since, it was only half-done; he placed a wedge in between to prevent the log from closing up. He then went off along with the other workers for his meal.When all the workers were gone, the monkeys came down from the trees and started jumping around the site, and playing with the instruments.There was one monkey, who got curious about the wedge placed between the log. He sat down on the log, and having placed himself in between the half-split log, caught hold of the wedge and started pulling at it.All of a sudden, the wedge came out. As a result, the half-split log closed in and the monkey got caught in the gap of the log.As was his destiny, he was severely wounded."""
-
+STORY_TEXT = """One day, a jackal called Gomaya was very hungry, and was wandering about in search of food.After some time, he wandered out of the jungle he lived in, and reached a deserted battlefield.In this deserted battlefield, a battle was fought recently. The fighting armies had left behind a drum, which was lying near a tree.As strong winds blew, the branches of the tree got rubbed against the drum. This made a strange noise.When the jackal heard this sound, he got very frightened and thought of running away, "If I cannot flee from here before I am seen by the person making all this noise, I will be in trouble".As he was about to run away, he had a second thought. "It is unwise to run away from something without knowing. Instead, I must be careful in finding out the source of this noise".He took the courage to creep forward cautiously. When he saw the drum, he realized that it was only the wind that was causing all the noise.He continued his search for food, and near the drum he found sufficient food and water."""
 # Story title for filename (optional)
-STORY_TITLE = "The Monkey and the Wedge"
+STORY_TITLE = "Jackal"
 
 # --- STORY PROMPT TEMPLATE ---
 # Since the model is already trained at the specific link, we just send the story directly
@@ -340,18 +339,156 @@ def get_story_title_for_filename():
     title = re.sub(r'[-\s]+', '_', title)
     return title
 
+def send_story_to_gemini(driver, wait, story_text):
+    """Send a new story to Gemini and wait for response"""
+    print("Sending new story to Gemini...")
+    
+    try:
+        # Look for the input field/textarea
+        input_selectors = [
+            "textarea[placeholder*='Enter a prompt']",
+            "textarea[placeholder*='Message']", 
+            ".ql-editor",
+            "[contenteditable='true']",
+            "textarea",
+            ".input-field",
+            ".prompt-textarea"
+        ]
+        
+        input_element = None
+        for selector in input_selectors:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                for element in elements:
+                    if element.is_displayed() and element.is_enabled():
+                        input_element = element
+                        print(f"Found input using selector: {selector}")
+                        break
+                if input_element:
+                    break
+            except:
+                continue
+        
+        if not input_element:
+            print("❌ Could not find input field. Please make sure you're on the Gemini chat page.")
+            return False
+        
+        # Clear any existing text and send the story
+        input_element.click()
+        time.sleep(1)
+        
+        # Clear existing content
+        input_element.clear()
+        time.sleep(0.5)
+        
+        # Type the story
+        print("Typing the story...")
+        input_element.send_keys(story_text)
+        time.sleep(2)
+        
+        # Send the message (try Enter or look for send button)
+        print("Sending the story...")
+        try:
+            input_element.send_keys(Keys.RETURN)
+        except:
+            # Try to find and click send button
+            send_selectors = [
+                "[aria-label*='Send']",
+                "button[type='submit']",
+                ".send-button",
+                "[data-testid*='send']"
+            ]
+            
+            send_button = None
+            for selector in send_selectors:
+                try:
+                    send_button = driver.find_element(By.CSS_SELECTOR, selector)
+                    if send_button.is_displayed():
+                        send_button.click()
+                        break
+                except:
+                    continue
+        
+        print("✅ Story sent successfully!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error sending story: {e}")
+        return False
+
+def wait_for_gemini_response(driver, wait, timeout_seconds=150):
+    """Wait for Gemini to generate a response"""
+    print(f"Waiting for Gemini response (timeout: {timeout_seconds} seconds)...")
+    
+    start_time = time.time()
+    last_length = 0
+    stable_count = 0
+    
+    while time.time() - start_time < timeout_seconds:
+        try:
+            # Check for response content
+            response_text = read_latest_gemini_response(driver, wait)
+            
+            if response_text:
+                current_length = len(response_text)
+                
+                # Check if response is growing (being generated)
+                if current_length > last_length:
+                    last_length = current_length
+                    stable_count = 0
+                    print(f"Response growing... ({current_length} characters)")
+                else:
+                    stable_count += 1
+                    
+                # If response has been stable for 3 checks (15 seconds), consider it complete
+                if stable_count >= 3 and current_length > 500:
+                    print(f"✅ Response appears complete ({current_length} characters)")
+                    return response_text
+            
+            time.sleep(5)  # Check every 5 seconds
+            
+        except Exception as e:
+            print(f"Error while waiting: {e}")
+            time.sleep(5)
+    
+    print(f"⚠️ Timeout reached ({timeout_seconds}s). Attempting to read current response...")
+    return read_latest_gemini_response(driver, wait)
+
 def main():
     # Use story from script configuration
     print("=== Gemini Scene Extractor ===")
-    print("This script will read the latest response from your current Gemini conversation")
-    print("and extract scene data for image generation.")
-    print("\nIMPORTANT: Make sure you have already sent your story to Gemini and received a response")
-    print("before running this script. The script will read whatever response is currently displayed.")
+    print("This script can either:")
+    print("1. Read the latest response from your current Gemini conversation")
+    print("2. Send a new story and wait for Gemini's response")
+    
+    # Ask user what they want to do
+    print("\nChoose an option:")
+    print("1. Read existing response from current conversation")
+    print("2. Send new story and wait for response")
+    
+    while True:
+        choice = input("Enter choice (1 or 2): ").strip()
+        if choice in ['1', '2']:
+            break
+        print("Please enter 1 or 2")
+    
+    send_new_story = (choice == '2')
     
     # Use story title from configuration for filename
     story_title = get_story_title_for_filename()
     
     print(f"\nProcessing conversation for: '{story_title}'")
+    
+    if send_new_story:
+        print(f"\nStory to be sent:")
+        print("-" * 50)
+        print(STORY_TEXT[:200] + "..." if len(STORY_TEXT) > 200 else STORY_TEXT)
+        print("-" * 50)
+        
+        confirm = input("\nSend this story to Gemini? (y/n): ").strip().lower()
+        if confirm != 'y':
+            print("Cancelled.")
+            return
     
     # Setup Chrome options
     options = webdriver.ChromeOptions()
@@ -378,16 +515,31 @@ def main():
         print("Waiting for Gemini interface to load...")
         time.sleep(5)
         
-        print("\n" + "="*60)
-        print("READING EXISTING RESPONSE FROM CONVERSATION")
-        print("="*60)
-        print("The script will now read the latest response that's already")
-        print("displayed in your Gemini conversation.")
-        print("Make sure you have already asked Gemini to analyze your story!")
-        print("="*60)
+        response_text = None
         
-        # Read the latest response from the page
-        response_text = read_latest_gemini_response(driver, wait)
+        if send_new_story:
+            print("\n" + "="*60)
+            print("SENDING NEW STORY TO GEMINI")
+            print("="*60)
+            
+            # Send the story
+            if send_story_to_gemini(driver, wait, STORY_TEXT):
+                # Wait for response
+                response_text = wait_for_gemini_response(driver, wait, timeout_seconds=150)
+            else:
+                print("❌ Failed to send story to Gemini")
+                return
+        else:
+            print("\n" + "="*60)
+            print("READING EXISTING RESPONSE FROM CONVERSATION")
+            print("="*60)
+            print("The script will now read the latest response that's already")
+            print("displayed in your Gemini conversation.")
+            print("Make sure you have already asked Gemini to analyze your story!")
+            print("="*60)
+            
+            # Read the latest response from the page
+            response_text = read_latest_gemini_response(driver, wait)
         
         if response_text:
             print("✅ Response found! Processing scene data...")

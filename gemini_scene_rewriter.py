@@ -190,6 +190,9 @@ def wait_for_gemini_response(driver, wait, timeout=120):
             if latest_response:
                 # Remove common UI elements that might be captured
                 latest_response = re.sub(r'(Enter a prompt here|Ask Gemini|Send|Copy|Share|Like|Dislike)', '', latest_response)
+                # Remove "Show thinking" prefixes that Gemini might add
+                latest_response = re.sub(r'^Show thinking\s*', '', latest_response, flags=re.IGNORECASE | re.MULTILINE)
+                latest_response = re.sub(r'^Thinking[\s\.:]*', '', latest_response, flags=re.IGNORECASE | re.MULTILINE)
                 latest_response = re.sub(r'\s+', ' ', latest_response).strip()
             
             current_length = len(latest_response)
@@ -258,7 +261,12 @@ def extract_rewritten_scene(response_text, scene_number):
     prompt_pattern = r'"?image_prompt"?\s*:\s*"([^"]*)"'
     prompt_match = re.search(prompt_pattern, response_text, re.IGNORECASE)
     if prompt_match:
-        rewritten_scene['image_prompt'] = prompt_match.group(1)
+        prompt_text = prompt_match.group(1)
+        # Clean up the prompt text
+        prompt_text = re.sub(r'^Show thinking\s*', '', prompt_text, flags=re.IGNORECASE)
+        prompt_text = re.sub(r'^Thinking[\s\.:]*', '', prompt_text, flags=re.IGNORECASE)
+        prompt_text = re.sub(rf'^Scene\s*{scene_number}[\s\.:]*', '', prompt_text, flags=re.IGNORECASE)
+        rewritten_scene['image_prompt'] = prompt_text.strip()
     
     # Extract composition
     comp_pattern = r'"?composition"?\s*:\s*"([^"]*)"'
@@ -291,6 +299,14 @@ def extract_rewritten_scene(response_text, scene_number):
     # Fallback: treat the entire response as the image_prompt
     clean_text = re.sub(r'```.*?```', '', response_text, flags=re.DOTALL)
     clean_text = re.sub(r'^"(.*)"$', r'\1', clean_text.strip())
+    
+    # Remove "Show thinking" and similar prefixes that Gemini might add
+    clean_text = re.sub(r'^Show thinking\s*', '', clean_text, flags=re.IGNORECASE)
+    clean_text = re.sub(r'^Thinking[\s\.:]*', '', clean_text, flags=re.IGNORECASE)
+    
+    # Remove redundant "Scene X:" prefix if it matches the scene number
+    scene_prefix_pattern = rf'^Scene\s*{scene_number}[\s\.:]*'
+    clean_text = re.sub(scene_prefix_pattern, '', clean_text, flags=re.IGNORECASE)
     
     return {
         'scene_number': scene_number,
@@ -338,6 +354,12 @@ def save_individual_scene(scene, original_filename):
     if not prompt:
         # Fallback to other fields if image_prompt is empty
         prompt = scene.get('scene_title', '') or scene.get('composition', '') or 'No prompt available'
+    
+    # Clean the prompt of any unwanted prefixes from Gemini
+    prompt = re.sub(r'^Show thinking\s*', '', prompt, flags=re.IGNORECASE)
+    prompt = re.sub(r'^Thinking[\s\.:]*', '', prompt, flags=re.IGNORECASE)
+    prompt = re.sub(rf'^Scene\s*{scene_num}[\s\.:]*', '', prompt, flags=re.IGNORECASE)
+    prompt = prompt.strip()
     
     # Create a unique filename for this individual scene
     scene_basename = os.path.basename(original_filename)
