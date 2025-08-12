@@ -22,10 +22,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # --- STORY CONFIGURATION ---
 # Enter your story here between the triple quotes
-STORY_TEXT = """King Krishnadevaraya loved horses and had the best collection of horse breeds in the Kingdom. Well, one day, a trader came to the King and told him that he had brought with him a horse of the best breed in Arabia. He invited the King to inspect the horse. King Krishnadevaraya loved the horse; so the trader said that the King could buy this one and that he had two more like this one, back in Arabia that he would go back to get. The King loved the horse so much that he had to have the other two as well. He paid the trader 5000 gold coins in advance. The trader promised that he would return within two days with the other horses.Two days turned into two weeks, and still, there was no sign of the trader and the two horses. One evening, to ease his mind, the King went on a stroll in his garden. There he spotted Tenali Raman writing down something on a piece of paper. Curious, the King asked Tenali what he was jotting down. Tenali Raman was hesitant, but after further questioning, he showed the King the paper. On the paper was a list of names, the King’s being at the top of the list. Tenali said these were the names of the biggest fools in the Vijayanagara Kingdom!. As expected, the King was furious that his name was at the top and asked Tenali Raman for an explanation. Tenali referred to the horse story, saying the King was a fool to believe that the trader, a stranger, would return after receiving 5000 gold coins.Countering his argument, the King then asked, what happens if/when the trader does come back? In true Tenali humour, he replied saying, in that case, the trader would be a bigger fool, and his name would replace the King’s on the list!"""
+STORY_TEXT = """There was once a merchant who employed many carpenters and masons to build a temple in his garden. Regularly, they would start work in the morning; and take a break for the mid-day meals, and return to resume work till evening.One day, a group of monkey arrived at the site of the building and watched the workers leaving for their mid-day meals.One of the carpenters was sawing a huge log of wood. Since, it was only half-done; he placed a wedge in between to prevent the log from closing up. He then went off along with the other workers for his meal.When all the workers were gone, the monkeys came down from the trees and started jumping around the site, and playing with the instruments.There was one monkey, who got curious about the wedge placed between the log. He sat down on the log, and having placed himself in between the half-split log, caught hold of the wedge and started pulling at it.All of a sudden, the wedge came out. As a result, the half-split log closed in and the monkey got caught in the gap of the log.As was his destiny, he was severely wounded."""
 
 # Story title for filename (optional)
-STORY_TITLE = "The Biggest Fool In The Kingdom!"
+STORY_TITLE = "The Monkey and the Wedge"
 
 # --- STORY PROMPT TEMPLATE ---
 # Since the model is already trained at the specific link, we just send the story directly
@@ -77,70 +77,113 @@ def authenticate_google(driver, wait):
     else:
         print("Already logged in or no login required.")
 
-def wait_for_gemini_response(driver, wait, timeout=120):
-    """Wait for Gemini to complete its response"""
-    print("Waiting for Gemini response...")
+def read_latest_gemini_response(driver, wait):
+    """Read the latest response from the current Gemini conversation"""
+    print("Reading the latest response from Gemini conversation...")
     
-    # Wait for response to appear and complete
-    start_time = time.time()
-    last_response_length = 0
-    stable_count = 0
-    
-    while time.time() - start_time < timeout:
-        try:
-            # Look for response containers
-            response_selectors = [
-                "[data-response-id]",
-                ".response-container",
-                ".markdown",
-                ".message-content",
-                "[role='presentation']",
-                ".model-response"
-            ]
+    try:
+        # Wait a moment for the page to settle
+        time.sleep(3)
+        
+        # Try multiple selectors to find response content
+        response_selectors = [
+            # Gemini-specific selectors (most likely)
+            "[data-message-author-role='model']",
+            ".model-response-text",
+            ".response-container",
+            "[role='presentation']",
+            ".markdown",
+            ".message-content",
             
-            response_text = ""
-            for selector in response_selectors:
-                try:
-                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                    if elements:
-                        for element in elements[-3:]:  # Check last few elements
-                            if element.is_displayed():
-                                text = element.get_attribute('textContent') or element.text
-                                if text and len(text) > len(response_text):
-                                    response_text = text
+            # Generic selectors as fallback
+            ".conversation .message:last-child",
+            ".chat-message:last-child",
+            "main .message:last-child"
+        ]
+        
+        response_text = ""
+        response_element = None
+        
+        for selector in response_selectors:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    # Get the last (most recent) response element
+                    for element in reversed(elements):
+                        if element.is_displayed():
+                            text = element.get_attribute('textContent') or element.text
+                            if text and len(text.strip()) > 100:  # Ensure it's substantial content
+                                response_text = text.strip()
+                                response_element = element
+                                print(f"Found response using selector: {selector}")
+                                break
+                    if response_text:
                         break
-                except:
-                    continue
+            except Exception as e:
+                print(f"Selector '{selector}' failed: {e}")
+                continue
+        
+        # If no specific selectors work, try to get the main conversation content
+        if not response_text:
+            print("Trying to extract from main conversation area...")
+            try:
+                main_selectors = [
+                    "main",
+                    ".conversation",
+                    ".chat-container",
+                    "#main-content",
+                    ".content"
+                ]
+                
+                for main_selector in main_selectors:
+                    try:
+                        main_element = driver.find_element(By.CSS_SELECTOR, main_selector)
+                        full_text = main_element.get_attribute('textContent') or main_element.text
+                        
+                        # Try to extract the last substantial block of text
+                        # Look for patterns that indicate a Gemini response
+                        if full_text:
+                            # Split by common separators and get the last substantial chunk
+                            chunks = full_text.split('\n\n')
+                            for chunk in reversed(chunks):
+                                if len(chunk.strip()) > 200 and ('Scene' in chunk or 'scene' in chunk):
+                                    response_text = chunk.strip()
+                                    print(f"Extracted response from main content using {main_selector}")
+                                    break
+                            if response_text:
+                                break
+                    except:
+                        continue
+            except Exception as e:
+                print(f"Error extracting from main content: {e}")
+        
+        if response_text:
+            print(f"Successfully extracted response ({len(response_text)} characters)")
+            print(f"Response preview: {response_text[:200]}...")
+            return response_text
+        else:
+            print("❌ Could not find any response content on the page")
             
-            # If no specific selectors work, try getting all text from main content
-            if not response_text:
-                try:
-                    main_content = driver.find_element(By.CSS_SELECTOR, "main, .conversation, .chat-container")
-                    response_text = main_content.get_attribute('textContent') or main_content.text
-                except:
-                    pass
+            # Debug: Save screenshot and page source
+            print("Saving debug information...")
+            driver.save_screenshot(os.path.join(OUTPUT_DIR, f"debug_no_response_{int(time.time())}.png"))
             
-            current_length = len(response_text)
+            # Try to get all text content for debugging
+            try:
+                all_text = driver.find_element(By.TAG_NAME, "body").text
+                debug_file = os.path.join(OUTPUT_DIR, f"debug_page_content_{int(time.time())}.txt")
+                with open(debug_file, 'w', encoding='utf-8') as f:
+                    f.write("=== FULL PAGE TEXT ===\n")
+                    f.write(all_text)
+                print(f"Full page content saved to: {debug_file}")
+            except:
+                pass
             
-            # Check if response has stopped growing (indicating completion)
-            if current_length == last_response_length:
-                stable_count += 1
-                if stable_count >= 3:  # Response has been stable for 3 checks
-                    print("Response appears complete.")
-                    return response_text
-            else:
-                stable_count = 0
-                last_response_length = current_length
-                print(f"Response length: {current_length} characters...")
+            return None
             
-            time.sleep(2)
-            
-        except Exception as e:
-            print(f"Error while waiting for response: {e}")
-            time.sleep(2)
-    
-    print("Timeout reached while waiting for response.")
-    return None
+    except Exception as e:
+        print(f"Error reading response: {e}")
+        return None
 
 def extract_scene_data(response_text):
     """Extract structured scene data from Gemini's response"""
@@ -282,30 +325,33 @@ def save_scene_data(scenes, story_title="story"):
     print(f"Scene data saved to: {filepath}")
     return filepath
 
+# Add a helper function to clean up the STORY_TEXT configuration
+# This removes the need to edit the story prompt format since we're reading existing responses
+
+def get_story_title_for_filename():
+    """Get a clean story title for filename generation"""
+    title = STORY_TITLE.strip()
+    if not title or title == "The Biggest Fool In The Kingdom!":
+        # Try to derive from current timestamp if default title
+        title = f"story_{int(time.time())}"
+    
+    # Clean title for filename
+    title = re.sub(r'[^\w\s-]', '', title).strip()
+    title = re.sub(r'[-\s]+', '_', title)
+    return title
+
 def main():
     # Use story from script configuration
     print("=== Gemini Scene Extractor ===")
-    print("This script will analyze your story and extract scene data for image generation.")
+    print("This script will read the latest response from your current Gemini conversation")
+    print("and extract scene data for image generation.")
+    print("\nIMPORTANT: Make sure you have already sent your story to Gemini and received a response")
+    print("before running this script. The script will read whatever response is currently displayed.")
     
-    # Get story from configuration
-    story_text = STORY_TEXT.strip()
+    # Use story title from configuration for filename
+    story_title = get_story_title_for_filename()
     
-    if not story_text or story_text == "Enter your story here...":
-        print("Error: Please edit the STORY_TEXT variable in the script with your actual story.")
-        print("Look for the STORY_TEXT variable at the top of the script and replace the placeholder text.")
-        return
-    
-    # Use story title from configuration
-    story_title = STORY_TITLE.strip()
-    if not story_title:
-        story_title = "story"
-    
-    # Clean title for filename
-    story_title = re.sub(r'[^\w\s-]', '', story_title).strip()
-    story_title = re.sub(r'[-\s]+', '_', story_title)
-    
-    print(f"Processing story: '{story_title}'")
-    print(f"Story length: {len(story_text)} characters")
+    print(f"\nProcessing conversation for: '{story_title}'")
     
     # Setup Chrome options
     options = webdriver.ChromeOptions()
@@ -323,87 +369,36 @@ def main():
         # Navigate to Gemini
         print("Navigating to Gemini...")
         driver.get("https://gemini.google.com/app/b58951e9acc687c4")
-
-       
         time.sleep(3)
         
-        # Handle authentication
+        # Handle authentication if needed
         authenticate_google(driver, wait)
-        
-        
         
         # Wait for page to load
         print("Waiting for Gemini interface to load...")
         time.sleep(5)
         
-        # Find the chat input field
-        print("Looking for chat input field...")
-        chat_input = None
-        input_selectors = [
-            "textarea[placeholder*='Enter a prompt']",
-            "textarea[placeholder*='Ask Gemini']",
-            "textarea[aria-label*='Message']",
-            "textarea",
-            "[contenteditable='true']",
-            "input[type='text']"
-        ]
+        print("\n" + "="*60)
+        print("READING EXISTING RESPONSE FROM CONVERSATION")
+        print("="*60)
+        print("The script will now read the latest response that's already")
+        print("displayed in your Gemini conversation.")
+        print("Make sure you have already asked Gemini to analyze your story!")
+        print("="*60)
         
-        for selector in input_selectors:
-            try:
-                chat_input = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                )
-                print(f"Found chat input using selector: {selector}")
-                break
-            except TimeoutException:
-                continue
-        
-        if not chat_input:
-            print("Could not find chat input field. Taking screenshot for debugging...")
-            driver.save_screenshot(os.path.join(OUTPUT_DIR, "debug_no_input.png"))
-            return
-        
-        # Prepare the full prompt
-        full_prompt = STORY_ANALYSIS_PROMPT.format(story_text=story_text)
-
-    
-        
-        # Send the prompt
-        print("Sending story analysis prompt to Gemini...")
-        chat_input.click()
-        time.sleep(1)
-        
-        # Type the prompt (splitting into chunks to avoid issues with long text)
-        chunk_size = 1000
-        for i in range(0, len(full_prompt), chunk_size):
-            chunk = full_prompt[i:i + chunk_size]
-            chat_input.send_keys(chunk)
-            time.sleep(0.1)  # Small delay between chunks
-        
-        # Send the message
-        chat_input.send_keys(Keys.ENTER)
-        print("Prompt sent. Waiting for Gemini response...")
-        
-        # MANDATORY WAIT: Wait at least 150 seconds before reading response
-        # This ensures we don't read cached/stale data from previous responses
-        print("Implementing mandatory 150-second wait to ensure fresh response...")
-        print("This prevents reading cached or ambiguous data from previous interactions.")
-        
-        for remaining in range(100, 0, -10):
-            print(f"Waiting {remaining} more seconds before reading response...")
-            time.sleep(10)
-        
-        print("Mandatory wait completed. Now reading fresh response...")
-        
-        # Wait for response
-        response_text = wait_for_gemini_response(driver, wait)
+        # Read the latest response from the page
+        response_text = read_latest_gemini_response(driver, wait)
         
         if response_text:
-            print("Response received! Processing scene data...")
+            print("✅ Response found! Processing scene data...")
             
             # Save raw response for debugging
             raw_response_file = os.path.join(OUTPUT_DIR, f"{story_title}_raw_response_{int(time.time())}.txt")
             with open(raw_response_file, 'w', encoding='utf-8') as f:
+                f.write("=== EXTRACTED RESPONSE ===\n")
+                f.write(f"Extracted at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Story title: {story_title}\n")
+                f.write("="*50 + "\n\n")
                 f.write(response_text)
             print(f"Raw response saved to: {raw_response_file}")
             
@@ -414,33 +409,53 @@ def main():
                 # Save structured scene data
                 scene_file = save_scene_data(scenes, story_title)
                 
-                print(f"\n=== SUCCESS ===")
-                print(f"Extracted {len(scenes)} scenes from your story!")
-                print(f"Scene data saved to: {scene_file}")
-                print(f"Raw response saved to: {raw_response_file}")
+                print(f"\n" + "="*50)
+                print("SUCCESS!")
+                print("="*50)
+                print(f"✅ Extracted {len(scenes)} scenes from the response!")
+                print(f"📄 Scene data saved to: {scene_file}")
+                print(f"📝 Raw response saved to: {raw_response_file}")
                 
                 # Print summary
-                print(f"\n=== SCENE SUMMARY ===")
+                print(f"\n📋 SCENE SUMMARY:")
+                print("-" * 30)
                 for scene in scenes:
                     print(f"Scene {scene['scene_number']}: {scene['scene_title']}")
+                print("-" * 30)
+                print(f"Total scenes: {len(scenes)}")
                 
             else:
-                print("No scenes could be extracted from the response.")
-                print("Check the raw response file for debugging.")
+                print("\n❌ No scenes could be extracted from the response.")
+                print("💡 Possible reasons:")
+                print("   - The response doesn't contain scene breakdowns")
+                print("   - The format is different than expected")
+                print("   - You may need to ask Gemini to break down your story into scenes first")
+                print(f"📝 Check the raw response file for debugging: {raw_response_file}")
         else:
-            print("No response received from Gemini.")
+            print("\n❌ No response found on the page.")
+            print("💡 Make sure you:")
+            print("   1. Have already sent your story to Gemini")
+            print("   2. Received a response with scene breakdowns")
+            print("   3. Are on the correct Gemini conversation page")
             
-        print("\nKeeping browser open for 10 seconds to view results...")
-        time.sleep(200)
+        print(f"\nKeeping browser open for 30 seconds so you can view the results...")
+        print("You can close this manually or wait for auto-close.")
+        time.sleep(30)
         
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"\n❌ An error occurred: {e}")
         # Take screenshot for debugging
-        driver.save_screenshot(os.path.join(OUTPUT_DIR, f"debug_error_{int(time.time())}.png"))
+        debug_screenshot = os.path.join(OUTPUT_DIR, f"debug_error_{int(time.time())}.png")
+        try:
+            driver.save_screenshot(debug_screenshot)
+            print(f"Debug screenshot saved to: {debug_screenshot}")
+        except:
+            pass
         
     finally:
-        print("Closing browser...")
+        print("\n🔄 Closing browser...")
         driver.quit()
+        print("✅ Done!")
 
 if __name__ == "__main__":
     main()
