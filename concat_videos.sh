@@ -46,18 +46,25 @@ if [ $# -eq 0 ]; then
     echo "Examples:"
     echo "  $0 ./my_videos"
     echo "  $0 ./recordings meeting.mp4"
-    echo "  $0 ./clips final_video.mp4 created"
+    echo "  $0 ./clips final_video.mp4 scene"
+    echo "  $0 ~/Downloads/scene_videos final_story.mp4 scene"
     echo ""
     echo "Parameters:"
     echo "  video_folder  - Folder containing video files"
     echo "  output_name   - Output file name (optional, default: concatenated_video.mp4)"
-    echo "  sort_by       - Sort by 'modified' or 'created' time (optional, default: modified)"
+    echo "  sort_by       - Sort by 'modified', 'created', 'scene', or 'auto' (optional, default: auto)"
+    echo ""
+    echo "Sort Options:"
+    echo "  • auto     - Auto-detect (scene if SCENE*.mp4 found, otherwise modified time)"
+    echo "  • scene    - Sort by scene number (SCENE1, SCENE2, etc.)"
+    echo "  • modified - Sort by file modification time"
+    echo "  • created  - Sort by file creation time"
     exit 1
 fi
 
 VIDEO_FOLDER="$1"
 OUTPUT_NAME="${2:-concatenated_video.mp4}"
-SORT_BY="${3:-modified}"
+SORT_BY="${3:-auto}"
 
 # Check if folder exists
 if [ ! -d "$VIDEO_FOLDER" ]; then

@@ -1345,6 +1345,14 @@ def process_scene(driver, wait, scene_data, scene_images):
                         print("Download initiated for this scene.")
                         # Human delay for download to start (simulating waiting for download)
                         time.sleep(random.uniform(4.0, 6.0))
+                        
+                        # Rename the downloaded video with scene number
+                        rename_success = rename_downloaded_video_for_scene(scene_num)
+                        if rename_success:
+                            print(f"✅ Video successfully renamed for Scene {scene_num}")
+                        else:
+                            print(f"⚠️ Failed to rename video for Scene {scene_num}")
+                            
                     except TimeoutException:
                         print("Download button not found or not clickable - continuing without download.")
                     
@@ -1407,6 +1415,71 @@ def clear_checkpoint():
             print("🗑️ Checkpoint cleared - workflow complete")
     except Exception as e:
         print(f"❌ Error clearing checkpoint: {e}")
+
+def wait_for_download_completion(timeout=60):
+    """Wait for download to complete by monitoring the download directory"""
+    print("⏳ Waiting for download to complete...")
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout:
+        # Look for .crdownload files (Chrome's partial download files)
+        partial_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.crdownload"))
+        if not partial_files:
+            # No partial downloads, check if any new files appeared
+            time.sleep(2)  # Give a moment for the file to appear
+            break
+        time.sleep(1)
+    
+    # Return the most recently downloaded file
+    files = glob.glob(os.path.join(DOWNLOAD_DIR, "*"))
+    if files:
+        latest_file = max(files, key=os.path.getctime)
+        return latest_file
+    return None
+
+def rename_downloaded_video_for_scene(scene_num, timeout=60):
+    """Rename the most recently downloaded video to SCENE{num}.mp4 format"""
+    try:
+        print(f"📝 Renaming downloaded video for Scene {scene_num}...")
+        
+        # Wait for download to complete
+        downloaded_file = wait_for_download_completion(timeout)
+        
+        if not downloaded_file:
+            print(f"❌ No downloaded file found for Scene {scene_num}")
+            return False
+        
+        # Skip if file is already renamed correctly
+        expected_name = f"SCENE{scene_num}.mp4"
+        if os.path.basename(downloaded_file) == expected_name:
+            print(f"✅ File already named correctly: {expected_name}")
+            return True
+        
+        # Only rename video files
+        video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v']
+        file_ext = os.path.splitext(downloaded_file)[1].lower()
+        
+        if file_ext not in video_extensions:
+            print(f"⚠️ Downloaded file is not a video: {downloaded_file}")
+            return False
+        
+        # Create new filename with scene number
+        new_filename = f"SCENE{scene_num}.mp4"
+        new_filepath = os.path.join(DOWNLOAD_DIR, new_filename)
+        
+        # Handle existing file with same name
+        if os.path.exists(new_filepath):
+            print(f"⚠️ File {new_filename} already exists, removing old version...")
+            os.remove(new_filepath)
+        
+        # Rename the file
+        os.rename(downloaded_file, new_filepath)
+        print(f"✅ Successfully renamed to: {new_filename}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error renaming video for Scene {scene_num}: {e}")
+        return False
 
 def restart_script_after_pause():
     """Restart the script after closing browsers and waiting"""

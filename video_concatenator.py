@@ -10,6 +10,7 @@ import sys
 import glob
 import subprocess
 import tempfile
+import re
 from pathlib import Path
 from datetime import datetime
 import argparse
@@ -55,6 +56,34 @@ def sort_files_by_time(files, sort_by='modified'):
     
     return sorted(files, key=get_time)
 
+def extract_scene_number(filepath):
+    """Extract scene number from SCENE*.mp4 filename"""
+    filename = os.path.basename(filepath)
+    match = re.search(r'SCENE(\d+)\.', filename, re.IGNORECASE)
+    return int(match.group(1)) if match else 0
+
+def sort_files_by_scene_number(files):
+    """Sort files by scene number (SCENE1, SCENE2, etc.)"""
+    def get_sort_key(file_path):
+        scene_num = extract_scene_number(file_path)
+        if scene_num > 0:
+            return (0, scene_num)  # Scene files come first, sorted by number
+        else:
+            # Non-scene files sorted by modification time after scene files
+            try:
+                stat = os.stat(file_path)
+                return (1, stat.st_mtime)
+            except OSError:
+                # If file doesn't exist, put it at the end
+                return (2, 0)
+    
+    return sorted(files, key=get_sort_key)
+
+def detect_scene_files(files):
+    """Detect if any files follow the SCENE*.mp4 pattern"""
+    scene_files = [f for f in files if extract_scene_number(f) > 0]
+    return len(scene_files) > 0
+
 def create_file_list(video_files, temp_dir):
     """Create a text file with the list of videos for FFmpeg concat filter"""
     list_file = os.path.join(temp_dir, 'file_list.txt')
@@ -96,8 +125,13 @@ def concatenate_videos(video_files, output_file, temp_dir):
     print(f"Concatenating {len(video_files)} videos...")
     print("Video files in order:")
     for i, video in enumerate(video_files, 1):
-        file_time = datetime.fromtimestamp(os.path.getmtime(video))
-        print(f"  {i}. {os.path.basename(video)} ({file_time.strftime('%Y-%m-%d %H:%M:%S')})")
+        filename = os.path.basename(video)
+        scene_num = extract_scene_number(video)
+        if scene_num > 0:
+            print(f"  {i}. {filename} (Scene {scene_num})")
+        else:
+            file_time = datetime.fromtimestamp(os.path.getmtime(video))
+            print(f"  {i}. {filename} ({file_time.strftime('%Y-%m-%d %H:%M:%S')})")
     
     # FFmpeg command to concatenate videos
     cmd = [
@@ -116,12 +150,12 @@ def concatenate_videos(video_files, output_file, temp_dir):
         return False
 
 def main():
-    parser = argparse.ArgumentParser(description='Concatenate videos sequentially by time')
+    parser = argparse.ArgumentParser(description='Concatenate videos sequentially by time or scene number')
     parser.add_argument('folder', help='Folder containing video files')
     parser.add_argument('-o', '--output', default='concatenated_video.mp4', 
                        help='Output video file name (default: concatenated_video.mp4)')
-    parser.add_argument('--sort-by', choices=['modified', 'created'], default='modified',
-                       help='Sort by creation or modification time (default: modified)')
+    parser.add_argument('--sort-by', choices=['modified', 'created', 'scene'], default='auto',
+                       help='Sort by creation time, modification time, or scene number (default: auto-detect)')
     parser.add_argument('--formats', nargs='+', default=SUPPORTED_FORMATS,
                        help=f'Video formats to include (default: {" ".join(SUPPORTED_FORMATS)})')
     
@@ -148,8 +182,26 @@ def main():
         print(f"Supported formats: {', '.join(SUPPORTED_FORMATS)}")
         sys.exit(1)
     
-    # Sort files by time
-    sorted_videos = sort_files_by_time(video_files, args.sort_by)
+    # Auto-detect sorting method or use specified method
+    has_scene_files = detect_scene_files(video_files)
+    
+    if args.sort_by == 'auto':
+        if has_scene_files:
+            sort_method = 'scene'
+            print("🎬 Detected SCENE*.mp4 files - using scene number sorting")
+        else:
+            sort_method = 'modified'
+            print("📅 No scene files detected - using modification time sorting")
+    else:
+        sort_method = args.sort_by
+    
+    # Sort files based on method
+    if sort_method == 'scene':
+        sorted_videos = sort_files_by_scene_number(video_files)
+        print("Sorting by scene number...")
+    else:
+        sorted_videos = sort_files_by_time(video_files, sort_method)
+        print(f"Sorting by {sort_method} time...")
     
     # Create temporary directory for file list
     with tempfile.TemporaryDirectory() as temp_dir:
